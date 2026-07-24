@@ -2,7 +2,9 @@ const SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets";
 const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const WEBHOOK_PATH = "/webhooks/gravity-forms";
 const IMPORT_PATH_PREFIX = "/import/";
-const TECHNICAL_ENTRY_ID_COLUMN = 25; // Z; A:Y is the visible 25-column table.
+const SYNC_PATH_PREFIX = "/sync/";
+const MASTER_MANUAL_START = 8; // I:L before the Közlemény column is inserted.
+const MASTER_MANUAL_END = 12;
 
 const CSV_HEADERS = [
   "Jelentkező (növendék) neve",
@@ -46,6 +48,11 @@ export default {
       return handleImport(request, env, importToken);
     }
 
+    const syncToken = getProtectedPathToken(url.pathname, SYNC_PATH_PREFIX);
+    if (syncToken !== null) {
+      return handleSync(request, env, syncToken);
+    }
+
     if (url.pathname !== WEBHOOK_PATH) return json({ error: "not_found" }, 404);
     if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
     if (!env.WEBHOOK_SHARED_SECRET ||
@@ -67,7 +74,7 @@ export default {
       const pipeline = getPipeline(env, text(payload.pipeline_id));
       const registration = registrationFromPayload(pipeline.adapter, payload);
       const accessToken = await getGoogleAccessToken(env.GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT);
-      const result = await upsertRegistrations(accessToken, pipeline, [registration]);
+      const result = await writeRegistrationsToTargets(accessToken, pipeline, [registration]);
       return json({
         status: "ok",
         pipeline_id: text(payload.pipeline_id),
@@ -99,7 +106,7 @@ async function handleImport(request, env, token) {
     const registrations = parseCsvRegistrations(parsed);
     const pipeline = getPipeline(env, text(form.get("pipeline_id")) || defaultPipelineId(env));
     const accessToken = await getGoogleAccessToken(env.GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT);
-    const result = await upsertRegistrations(accessToken, pipeline, registrations);
+    const result = await writeRegistrationsToTargets(accessToken, pipeline, registrations);
     return html(importResultPage(result, registrations.length));
   } catch (error) {
     console.error("CSV import failed", error);
@@ -108,8 +115,12 @@ async function handleImport(request, env, token) {
 }
 
 function getImportToken(pathname) {
-  if (!pathname.startsWith(IMPORT_PATH_PREFIX)) return null;
-  const token = pathname.slice(IMPORT_PATH_PREFIX.length).replace(/\/$/, "");
+  return getProtectedPathToken(pathname, IMPORT_PATH_PREFIX);
+}
+
+function getProtectedPathToken(pathname, prefix) {
+  if (!pathname.startsWith(prefix)) return null;
+  const token = pathname.slice(prefix.length).replace(/\/$/, "");
   return token || null;
 }
 
@@ -138,6 +149,28 @@ function parsePipelines(rawConfig) {
     }
     return [pipeline.pipeline_id, pipeline];
   }));
+}
+
+async function handleSync(request, env, token) {
+  if (!env.SYNC_ADMIN_TOKEN || !safeEqual(token, env.SYNC_ADMIN_TOKEN)) {
+    return json({ error: "not_found" }, 404);
+  }
+  if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
+
+  try {
+    let payload = {};
+    const raw = await request.text();
+    if (raw.trim()) payload = JSON.parse(raw);
+    const pipeline = getPipeline(env, text(payload.pipeline_id) || defaultPipelineId(env));
+    if (!pipeline.staff_target) throw new Error("Ehhez a pipeline-hoz nincs munkatársi Sheet beállítva.");
+
+    const accessToken = await getGoogleAccessToken(env.GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT);
+    const result = await syncStaffTarget(accessToken, pipeline);
+    return json({ status: "ok", pipeline_id: pipeline.pipeline_id, ...result });
+  } catch (error) {
+    console.error("Staff Sheet sync failed", error);
+    return json({ error: "sync_failed" }, 500);
+  }
 }
 
 function parseCsv(csvText) {
@@ -238,7 +271,15 @@ function parseBilling(raw) {
   return [lines.slice(0, -1).join(" | "), lines[lines.length - 1]];
 }
 
-async function upsertRegistrations(accessToken, pipeline, registrations) {
+async function writeRegistrationsToTargets(accessToken, pipeline, registrations) {
+  const masterResult = await upsertMasterRegistrations(accessToken, pipeline, registrations);
+  if (pipeline.staff_target) {
+    await upsertStaffRegistrations(accessToken, pipeline.staff_target, registrations);
+  }
+  return masterResult;
+}
+
+async function upsertMasterRegistrations(accessToken, pipeline, registrations) {
   const baseUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(pipeline.spreadsheet_id)}`;
   const readRange = encodeURIComponent(`${quoteSheetName(pipeline.tab_name)}!A:Z`);
   const current = await googleFetch(`${baseUrl}/values/${readRange}`, accessToken);
@@ -248,14 +289,14 @@ async function upsertRegistrations(accessToken, pipeline, registrations) {
   const data = [];
 
   for (const registration of registrations) {
-    const rowIndex = findTargetRow(mutableRows, registration);
+    const rowIndex = findMasterRow(mutableRows, registration);
     while (mutableRows.length < rowIndex) mutableRows.push([]);
     const existing = mutableRows[rowIndex - 1] || [];
-    const merged = mergeRow(existing, registration);
+    const merged = mergeMasterRow(existing, registration);
     mutableRows[rowIndex - 1] = merged;
-    data.push({ range: `${quoteSheetName(pipeline.tab_name)}!A${rowIndex}:H${rowIndex}`, values: [merged.slice(0, 8)] });
-    data.push({ range: `${quoteSheetName(pipeline.tab_name)}!M${rowIndex}:Z${rowIndex}`, values: [merged.slice(12, 26)] });
-    results.push({ rowIndex, type: existing[4] ? "updated" : "created", studentName: registration.studentName });
+    data.push({ range: `${quoteSheetName(pipeline.tab_name)}!A${rowIndex}:I${rowIndex}`, values: [merged.slice(0, 9)] });
+    data.push({ range: `${quoteSheetName(pipeline.tab_name)}!N${rowIndex}:Z${rowIndex}`, values: [merged.slice(13, 26)] });
+    results.push({ rowIndex, type: existing[5] ? "updated" : "created", studentName: registration.studentName });
   }
 
   await googleFetch(`${baseUrl}/values:batchUpdate`, accessToken, {
@@ -265,21 +306,132 @@ async function upsertRegistrations(accessToken, pipeline, registrations) {
   return { results };
 }
 
-function mergeRow(existing, registration) {
+function mergeMasterRow(existing, registration) {
   const merged = Array.from({ length: 26 }, (_, index) => existing[index] || "");
-  registration.row.forEach((value, index) => { if (index < 8 || index >= 12) merged[index] = value; });
-  merged[TECHNICAL_ENTRY_ID_COLUMN] = registration.entryId || merged[TECHNICAL_ENTRY_ID_COLUMN];
+  merged[0] = registration.entryId || merged[0];
+  registration.row.forEach((value, index) => {
+    const targetIndex = index + 1;
+    if (index < MASTER_MANUAL_START || index >= MASTER_MANUAL_END) merged[targetIndex] = value;
+  });
   return merged;
 }
 
-function findTargetRow(rows, registration) {
+function findMasterRow(rows, registration) {
   for (let index = 1; index < rows.length; index += 1) {
     const row = rows[index] || [];
-    if (registration.entryId && text(row[TECHNICAL_ENTRY_ID_COLUMN]) === registration.entryId) return index + 1;
-    if (text(row[4]) === registration.studentName && text(row[5]) === registration.submittedAt) return index + 1;
+    if (registration.entryId && text(row[0]) === registration.entryId) return index + 1;
+    if (text(row[5]) === registration.studentName && text(row[6]) === registration.submittedAt) return index + 1;
   }
-  for (let index = 1; index < rows.length; index += 1) if (!text(rows[index]?.[4])) return index + 1;
+  for (let index = 1; index < rows.length; index += 1) if (!text(rows[index]?.[5])) return index + 1;
   return Math.max(2, rows.length + 1);
+}
+
+function staffRowFromRegistration(registration) {
+  return [registration.entryId, ...registration.row.slice(0, 7)];
+}
+
+async function upsertStaffRegistrations(accessToken, target, registrations) {
+  const baseUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(target.spreadsheet_id)}`;
+  const readRange = encodeURIComponent(`${quoteSheetName(target.tab_name)}!A:H`);
+  const current = await googleFetch(`${baseUrl}/values/${readRange}`, accessToken);
+  const rows = current.values || [];
+  const mutableRows = rows.map((row) => [...row]);
+  const data = [];
+
+  for (const registration of registrations) {
+    const rowIndex = findStaffRow(mutableRows, registration.entryId);
+    while (mutableRows.length < rowIndex) mutableRows.push([]);
+    mutableRows[rowIndex - 1] = staffRowFromRegistration(registration);
+    data.push({ range: `${quoteSheetName(target.tab_name)}!A${rowIndex}:H${rowIndex}`, values: [mutableRows[rowIndex - 1]] });
+  }
+
+  if (data.length) {
+    await googleFetch(`${baseUrl}/values:batchUpdate`, accessToken, {
+      method: "POST",
+      body: JSON.stringify({ valueInputOption: "RAW", data }),
+    });
+  }
+}
+
+function findStaffRow(rows, entryId) {
+  for (let index = 1; index < rows.length; index += 1) {
+    if (entryId && text(rows[index]?.[0]) === entryId) return index + 1;
+  }
+  for (let index = 1; index < rows.length; index += 1) if (!text(rows[index]?.[5])) return index + 1;
+  return Math.max(2, rows.length + 1);
+}
+
+async function syncStaffTarget(accessToken, pipeline) {
+  const masterRows = await readSheetRows(accessToken, pipeline.spreadsheet_id, pipeline.tab_name, "A:Z");
+  if (text(masterRows[0]?.[0]) !== "Közlemény") {
+    throw new Error("A fő Sheet első oszlopának Közleménynek kell lennie.");
+  }
+
+  const registrations = masterRows.slice(1)
+    .filter((row) => text(row[0]) && text(row[5]))
+    .map((row) => ({ entryId: text(row[0]), studentName: text(row[5]), submittedAt: text(row[6]), row: row.slice(1, 26) }));
+  const target = pipeline.staff_target;
+  const staffRows = await readSheetRows(accessToken, target.spreadsheet_id, target.tab_name, "A:H");
+  const masterIds = new Set(registrations.map((registration) => registration.entryId));
+  const mutableRows = staffRows.map((row) => [...row]);
+  const data = [];
+  let created = 0;
+  let updated = 0;
+
+  for (const registration of registrations) {
+    const existingIndex = mutableRows.findIndex((row, index) => index > 0 && text(row?.[0]) === registration.entryId);
+    const rowIndex = existingIndex >= 0 ? existingIndex + 1 : findStaffRow(mutableRows, registration.entryId);
+    while (mutableRows.length < rowIndex) mutableRows.push([]);
+    mutableRows[rowIndex - 1] = staffRowFromRegistration(registration);
+    data.push({ range: `${quoteSheetName(target.tab_name)}!A${rowIndex}:H${rowIndex}`, values: [mutableRows[rowIndex - 1]] });
+    if (existingIndex >= 0) updated += 1;
+    else created += 1;
+  }
+
+  if (data.length) {
+    const baseUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(target.spreadsheet_id)}`;
+    await googleFetch(`${baseUrl}/values:batchUpdate`, accessToken, {
+      method: "POST",
+      body: JSON.stringify({ valueInputOption: "RAW", data }),
+    });
+  }
+
+  const deleteRows = staffRows
+    .map((row, index) => ({ row, index }))
+    .filter(({ row, index }) => index > 0 && text(row?.[0]) && !masterIds.has(text(row[0])))
+    .map(({ index }) => index + 1)
+    .sort((left, right) => right - left);
+  if (deleteRows.length) await deleteRowsByIndex(accessToken, target, deleteRows);
+
+  return { created, updated, deleted: deleteRows.length, total: registrations.length };
+}
+
+async function readSheetRows(accessToken, spreadsheetId, tabName, columns) {
+  const baseUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}`;
+  const range = encodeURIComponent(`${quoteSheetName(tabName)}!${columns}`);
+  const result = await googleFetch(`${baseUrl}/values/${range}`, accessToken);
+  return result.values || [];
+}
+
+async function deleteRowsByIndex(accessToken, target, rowIndexes) {
+  const sheetId = await getSheetId(accessToken, target.spreadsheet_id, target.tab_name);
+  const baseUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(target.spreadsheet_id)}`;
+  await googleFetch(`${baseUrl}:batchUpdate`, accessToken, {
+    method: "POST",
+    body: JSON.stringify({
+      requests: rowIndexes.map((rowIndex) => ({
+        deleteDimension: { range: { sheetId, dimension: "ROWS", startIndex: rowIndex - 1, endIndex: rowIndex } },
+      })),
+    }),
+  });
+}
+
+async function getSheetId(accessToken, spreadsheetId, tabName) {
+  const baseUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}`;
+  const result = await googleFetch(`${baseUrl}?fields=sheets.properties(sheetId,title)`, accessToken);
+  const sheet = (result.sheets || []).find((item) => item.properties?.title === tabName);
+  if (!sheet) throw new Error(`Nem található fül: ${tabName}`);
+  return sheet.properties.sheetId;
 }
 
 async function getGoogleAccessToken(rawServiceAccount) {
@@ -339,4 +491,4 @@ function importResultPage(result, count) {
 
 function escapeHtml(value) { return String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char])); }
 
-export { CSV_HEADERS, findTargetRow, mergeRow, parseCsv, parseCsvRegistrations, registrationFromCsvRow };
+export { CSV_HEADERS, findMasterRow, mergeMasterRow, parseCsv, parseCsvRegistrations, registrationFromCsvRow };

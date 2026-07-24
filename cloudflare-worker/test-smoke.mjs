@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import worker, {
   CSV_HEADERS,
-  mergeRow,
   parseCsv,
   parseCsvRegistrations,
 } from "./src/worker.js";
@@ -18,6 +17,10 @@ const pipeline = {
   adapter: "dance_course_registration",
   spreadsheet_id: "test-spreadsheet",
   tab_name: " TAGOK I FÉLÉV",
+  staff_target: {
+    spreadsheet_id: "test-staff-spreadsheet",
+    tab_name: "TAGOK 2026-27",
+  },
 };
 const env = {
   IMPORT_ADMIN_TOKEN: "test-import-token",
@@ -27,7 +30,10 @@ const env = {
 };
 
 const sheetState = [
-  ["Tanfolyam neve", "Nap és terem", "Óra ideje", "Táncpedagógusok", "Jelentkező (növendék) neve", "Jelentkezés ideje", "Tanfolyamon részvétel kezdete / naptár", "Próbaórára jelentkezés", "I", "J", "K", "L", "Születési dátum", "Lakcím", "Telefon", "E-mail cím", "Törvényes képviselő, szülő neve", "Kerület Kártya száma", "Kerület Kártya lejárati dátuma", "Kerület Kártya fotója", "Testvér neve", "Testvér csoportja", "Rendelkezik jóváírható összeggel", "Számlázási adatok", "Számlázási email", "Gravity Forms ID"],
+  ["Közlemény", "Tanfolyam neve", "Nap és terem", "Óra ideje", "Táncpedagógusok", "Jelentkező (növendék) neve", "Jelentkezés ideje", "Tanfolyamon részvétel kezdete / naptár", "Próbaórára jelentkezés", "I", "J", "K", "L", "Születési dátum", "Lakcím", "Telefon", "E-mail cím", "Törvényes képviselő, szülő neve", "Kerület Kártya száma", "Kerület Kártya lejárati dátuma", "Kerület Kártya fotója", "Testvér neve", "Testvér csoportja", "Rendelkezik jóváírható összeggel", "Számlázási adatok", "Számlázási email"],
+];
+const staffState = [
+  ["Közlemény", "Tanfolyam", "Nap és terem", "Óra ideje", "Táncpedagógusok", "Jelentkező (növendék) neve", "Jelentkezés ideje", "Tanfolyamon részvétel kezdete / naptár"],
 ];
 
 const originalFetch = globalThis.fetch;
@@ -38,11 +44,23 @@ globalThis.fetch = async (input, options = {}) => {
   }
   if (url.includes("/values:batchUpdate")) {
     const body = JSON.parse(options.body);
-    for (const item of body.data) applyRange(item.range, item.values[0]);
+    const state = url.includes("test-staff-spreadsheet") ? staffState : sheetState;
+    for (const item of body.data) applyRange(item.range, item.values[0], state);
     return new Response(JSON.stringify({ totalUpdatedCells: body.data.length }), { status: 200 });
   }
+  if (url.includes("test-staff-spreadsheet:batchUpdate")) {
+    const body = JSON.parse(options.body);
+    for (const request of body.requests) {
+      const range = request.deleteDimension.range;
+      staffState.splice(range.startIndex, range.endIndex - range.startIndex);
+    }
+    return new Response(JSON.stringify({ replies: [] }), { status: 200 });
+  }
+  if (url.includes("test-staff-spreadsheet?fields=")) {
+    return new Response(JSON.stringify({ sheets: [{ properties: { sheetId: 42, title: "TAGOK 2026-27" } }] }), { status: 200 });
+  }
   if (url.includes("/values/")) {
-    return new Response(JSON.stringify({ values: sheetState }), { status: 200 });
+    return new Response(JSON.stringify({ values: url.includes("test-staff-spreadsheet") ? staffState : sheetState }), { status: 200 });
   }
   return originalFetch(input, options);
 };
@@ -69,13 +87,15 @@ try {
   assert.equal(first.status, 200);
   assert.match(await first.text(), /Új: 1/);
   assert.equal(sheetState.length, 2);
-  assert.equal(sheetState[1][4], "Codex Teszt Dami");
-  assert.equal(sheetState[1][25], "TEST-CODEX-20260723-001");
+  assert.equal(sheetState[1][5], "Codex Teszt Dami");
+  assert.equal(sheetState[1][0], "TEST-CODEX-20260723-001");
+  assert.equal(staffState[1][0], "TEST-CODEX-20260723-001");
+  assert.equal(staffState[1][5], "Codex Teszt Dami");
 
-  sheetState[1][8] = "KEEP-I";
-  sheetState[1][9] = "KEEP-J";
-  sheetState[1][10] = "KEEP-K";
-  sheetState[1][11] = "KEEP-L";
+  sheetState[1][9] = "KEEP-I";
+  sheetState[1][10] = "KEEP-J";
+  sheetState[1][11] = "KEEP-K";
+  sheetState[1][12] = "KEEP-L";
   const changedFixture = fixture.replace("1111 Budapest, Teszt utca 1.", "2222 Budapest, Módosított utca 2.");
   const form2 = new FormData();
   form2.append("file", new Blob([changedFixture], { type: "text/csv" }), "dami-registration.csv");
@@ -83,8 +103,8 @@ try {
   assert.equal(second.status, 200);
   assert.match(await second.text(), /Új: 0/);
   assert.equal(sheetState.length, 2);
-  assert.equal(sheetState[1][13], "2222 Budapest, Módosított utca 2.");
-  assert.deepEqual(sheetState[1].slice(8, 12), ["KEEP-I", "KEEP-J", "KEEP-K", "KEEP-L"]);
+  assert.equal(sheetState[1][14], "2222 Budapest, Módosított utca 2.");
+  assert.deepEqual(sheetState[1].slice(9, 13), ["KEEP-I", "KEEP-J", "KEEP-K", "KEEP-L"]);
 
   const incomplete = new FormData();
   incomplete.append("file", new Blob(["name,email\nDami,dummy@example.invalid\n"], { type: "text/csv" }), "bad.csv");
@@ -104,22 +124,35 @@ try {
     }),
   }), env);
   assert.equal(webhook.status, 200);
-  assert.equal(sheetState[2][0], "MODERN TÁNC 10-14 ÉVES /SZERDA BERCZIK TEREM/17.00-18.00/TEST TANÁR");
-  assert.equal(sheetState[2][4], "Codex Webhook Teszt");
-  assert.equal(sheetState[2][25], "TEST-WEBHOOK-001");
+  assert.equal(sheetState[2][1], "MODERN TÁNC 10-14 ÉVES /SZERDA BERCZIK TEREM/17.00-18.00/TEST TANÁR");
+  assert.equal(sheetState[2][5], "Codex Webhook Teszt");
+  assert.equal(sheetState[2][0], "TEST-WEBHOOK-001");
+  assert.equal(staffState[2][0], "TEST-WEBHOOK-001");
+
+  staffState.push(["ORPHAN-ROW", "Törölt", "", "", "", "", "", ""]);
+  const sync = await worker.fetch(new Request("https://example.test/sync/test-sync-token", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pipeline_id: pipeline.pipeline_id }),
+  }), { ...env, SYNC_ADMIN_TOKEN: "test-sync-token" });
+  assert.equal(sync.status, 200);
+  assert.deepEqual(await sync.json(), {
+    status: "ok", pipeline_id: pipeline.pipeline_id, created: 0, updated: 2, deleted: 1, total: 2,
+  });
+  assert.equal(staffState.some((row) => row[0] === "ORPHAN-ROW"), false);
 
   console.log("Cloudflare Worker CSV/webhook smoke tests passed.");
 } finally {
   globalThis.fetch = originalFetch;
 }
 
-function applyRange(range, values) {
+function applyRange(range, values, state) {
   const match = range.match(/!([A-Z]+)(\d+):([A-Z]+)\d+$/);
   assert.ok(match, `Unexpected range: ${range}`);
   const startColumn = columnNumber(match[1]);
   const rowIndex = Number(match[2]) - 1;
-  while (sheetState.length <= rowIndex) sheetState.push([]);
-  const row = sheetState[rowIndex];
+  while (state.length <= rowIndex) state.push([]);
+  const row = state[rowIndex];
   values.forEach((value, offset) => { row[startColumn + offset] = value; });
 }
 

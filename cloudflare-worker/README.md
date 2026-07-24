@@ -20,6 +20,7 @@ accounttal közvetlenül hívja, nincs szükség Google Cloud Runra.
    npx wrangler secret put WEBHOOK_SHARED_SECRET
    npx wrangler secret put GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT
    npx wrangler secret put IMPORT_ADMIN_TOKEN
+   npx wrangler secret put SYNC_ADMIN_TOKEN
    ```
 
    A másodikhoz a Google service account JSON fájl **teljes tartalma** kell,
@@ -73,9 +74,23 @@ helyre. Ha később Access-védelemre váltunk, az engedélyezett címek:
 - `sziranyi.laura@kult2.hu`
 
 Az import kizárólag a teljes tanfolyam-export fejlécét fogadja el. A hiányos
-`gf_entry_4` exportot elutasítja. Meglévő rekordnál az I:L kézi oszlopok
-megmaradnak; a Gravity Forms bejegyzésazonosító technikai kulcsként a Z
+`gf_entry_4` exportot elutasítja. Meglévő rekordnál a J:M kézi oszlopok
+megmaradnak; a Gravity Forms bejegyzésazonosító a látható első, `Közlemény`
 oszlopban tárolódik.
+
+## Munkatársi Sheet szinkron
+
+A pipeline `staff_target` beállítása esetén a Worker minden új webhook- és
+CSV-rekordot a fő Sheet mellett a munkatársi Sheetbe is beír. A munkatársi
+Sheetben csak az `A:H` mezők szinkronizáltak; a további kézi, pénzügyi és
+megjegyzés-oszlopok érintetlenek maradnak.
+
+A fő Sheethez kötött Apps Script a `Budai Tánc → Munkatársi Sheet
+szinkronizálása` menüponttal indít teljes egyeztetést. A kód az
+`../apps-script/master-sheet-sync.gs` fájlban van. A token egyszeri megadása
+a Script Properties-ben történik. A szinkron fizikailag törli a munkatársi
+Sheetből azokat az azonosítóval ellátott sorokat, amelyek már nincsenek a fő
+Sheetben.
 
 ## Tesztelés
 

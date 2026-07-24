@@ -4,7 +4,11 @@
       "pipeline_id": "tanctanfolyam_jelentkezes",
       "adapter": "dance_course_registration",
       "spreadsheet_id": "1hHlwBe_pK-Cdg7zoGFrd1adeTw8lYAMyZOCKZmzlcTs",
-      "tab_name": " TAGOK I FÉLÉV"
+      "tab_name": " TAGOK I FÉLÉV",
+      "staff_target": {
+        "spreadsheet_id": "1Tusi8FGqRPfRzB0WuxNz3LfTWrZxo05XswxIiZw-UzY",
+        "tab_name": "TAGOK 2026-27"
+      }
     },
     {
       "pipeline_id": "tancverseny_jelentkezes",

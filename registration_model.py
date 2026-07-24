@@ -17,6 +17,7 @@ class SheetRecord(Protocol):
 
 @dataclass
 class Registration:
+    reference_id: str
     course_name: str
     venue: str
     time: str
@@ -44,36 +45,37 @@ class Registration:
         # Columns follow the current Google Sheet layout after inserting
         # the course name as column A and "Próbaórára jelentkezés" after start date.
         return [
-            self.course_name,  # A
-            self.venue,  # B
-            self.time,  # C
-            self.teacher,  # D
-            self.student_name,  # E
-            self.submitted_at,  # F
-            self.start_date,  # G
-            self.trial_signup,  # H
-            "",  # I - I. féléves tandíjfizetés dátuma
-            "",  # J - I. tagsági kiállítva
-            "",  # K - Egyéb megjegyzés
-            "",  # L - Más óraszámban jár
-            self.birth_date,  # M
-            self.address,  # N
-            self.phone,  # O
-            self.email,  # P
-            self.parent_name,  # Q
-            self.district_card_number,  # R
-            self.district_card_expiry,  # S
-            self.district_card_photo,  # T
-            self.sibling_name,  # U
-            self.sibling_group,  # V
-            self.carryover_amount,  # W
-            self.billing_address,  # X
-            self.billing_email,  # Y
+            self.reference_id,  # A - Közlemény / Gravity Forms ID
+            self.course_name,  # B
+            self.venue,  # C
+            self.time,  # D
+            self.teacher,  # E
+            self.student_name,  # F
+            self.submitted_at,  # G
+            self.start_date,  # H
+            self.trial_signup,  # I
+            "",  # J - I. féléves tandíjfizetés dátuma
+            "",  # K - I. tagsági kiállítva
+            "",  # L - Egyéb megjegyzés
+            "",  # M - Más óraszámban jár
+            self.birth_date,  # N
+            self.address,  # O
+            self.phone,  # P
+            self.email,  # Q
+            self.parent_name,  # R
+            self.district_card_number,  # S
+            self.district_card_expiry,  # T
+            self.district_card_photo,  # U
+            self.sibling_name,  # V
+            self.sibling_group,  # W
+            self.carryover_amount,  # X
+            self.billing_address,  # Y
+            self.billing_email,  # Z
         ]
 
     @property
     def record_key(self) -> tuple[str, str]:
-        return (self.student_name, self.submitted_at)
+        return (self.reference_id or self.student_name, self.submitted_at)
 
     @property
     def display_name(self) -> str:

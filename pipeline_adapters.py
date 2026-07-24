@@ -39,6 +39,7 @@ def csv_row_to_dance_course_registration(row: dict[str, str]) -> Registration:
         row["Kérek számlát az alábbi adatokkal"]
     )
     return Registration(
+        reference_id=row.get("Bejegyzés azonosító", "").strip(),
         course_name=course_name,
         venue=venue,
         time=time,
@@ -65,6 +66,7 @@ def csv_row_to_dance_course_registration(row: dict[str, str]) -> Registration:
 
 def webhook_payload_to_dance_course_registration(payload: dict) -> Registration:
     return Registration(
+        reference_id=str(payload.get("entry_id", "")).strip(),
         course_name=str(payload.get("course_name", "")).strip(),
         venue=str(payload.get("venue", "")).strip(),
         time=str(payload.get("time", "")).strip(),

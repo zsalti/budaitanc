@@ -53,7 +53,7 @@ def read_existing_rows(service, spreadsheet_id: str, tab_name: str) -> list[list
     result = (
         service.spreadsheets()
         .values()
-        .get(spreadsheetId=spreadsheet_id, range=f"'{tab_name}'!A:Y")
+        .get(spreadsheetId=spreadsheet_id, range=f"'{tab_name}'!A:Z")
         .execute()
     )
     return result.get("values", [])
@@ -63,7 +63,7 @@ def find_next_empty_row(existing_rows: list[list[str]], min_row: int = 2) -> int
     row_index = min_row
     while row_index <= len(existing_rows):
         row = existing_rows[row_index - 1] if row_index - 1 < len(existing_rows) else []
-        student_name = row[4].strip() if len(row) > 4 else ""
+        student_name = row[5].strip() if len(row) > 5 else ""
         if not student_name:
             return row_index
         row_index += 1
@@ -76,9 +76,12 @@ def find_existing_registration_row(
     for row_index, row in enumerate(existing_rows, start=1):
         if row_index == 1:
             continue
-        student_name = row[4].strip() if len(row) > 4 else ""
-        submitted_at = row[5].strip() if len(row) > 5 else ""
-        if (student_name, submitted_at) == registration.record_key:
+        reference_id = row[0].strip() if row else ""
+        student_name = row[5].strip() if len(row) > 5 else ""
+        submitted_at = row[6].strip() if len(row) > 6 else ""
+        if registration.record_key[0] and reference_id == registration.record_key[0]:
+            return row_index
+        if not registration.record_key[0] and (student_name, submitted_at) == registration.record_key:
             return row_index
     return None
 
@@ -96,13 +99,19 @@ def write_registrations(
     if dry_run:
         return pending_updates
 
-    data = [
-        {
-            "range": f"'{tab_name}'!A{row_index}:Y{row_index}",
-            "values": [registration.sheet_row],
-        }
-        for row_index, registration in pending_updates
-    ]
+    data = []
+    for row_index, registration in pending_updates:
+        existing = existing_rows[row_index - 1] if row_index - 1 < len(existing_rows) else []
+        merged = list(registration.sheet_row)
+        for column in range(9, 13):
+            if column < len(existing):
+                merged[column] = existing[column]
+        data.append(
+            {
+                "range": f"'{tab_name}'!A{row_index}:Z{row_index}",
+                "values": [merged],
+            }
+        )
     (
         service.spreadsheets()
         .values()
@@ -128,7 +137,12 @@ def prepare_updates(
 
         while len(mutable_rows) < target_row:
             mutable_rows.append([])
-        mutable_rows[target_row - 1] = registration.sheet_row
+        existing = mutable_rows[target_row - 1]
+        merged = list(registration.sheet_row)
+        for column in range(9, 13):
+            if column < len(existing):
+                merged[column] = existing[column]
+        mutable_rows[target_row - 1] = merged
         pending_updates.append((target_row, registration))
 
     return pending_updates
