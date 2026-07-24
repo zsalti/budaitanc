@@ -1,0 +1,38 @@
+Szia,
+
+a Gravity Forms natív Webhooks Add-On licencköteles, ezért azt nem szeretnénk használni.
+
+Készítettünk egy egyszerű custom WordPress pluginfájlt, ami a Gravity Forms `gform_after_submission` hookjára csatlakozik, és a 4-es azonosítójú űrlap sikeres beküldése után JSON formátumban elküldi az adatokat egy külső endpointnak HTTP POST-tal.
+
+A plugin már tartalmazza a végleges publikus webhook URL-t. A `shared_secret`
+értékét a külön, biztonságos csatornán küldött titokra kell cserélned; ezt nem
+küldjük e-mailben és nem tároljuk a GitHubon.
+
+Arra kérlek, ezt a sorrendet kövesd:
+
+1. Töltsd fel ezt a pluginfájlt a WordPressbe:
+- [gravity-forms-webhook-relay.php](/Users/zsoltrenyi/Documents/AI/BudaiTánc/wordpress/gravity-forms-webhook-relay.php)
+
+2. Aktiváld a plugint.
+
+3. A pluginfájlban keresd meg ezt a sort:
+- `'shared_secret' => 'REPLACE_WITH_WEBHOOK_SHARED_SECRET'`
+
+4. A placeholder helyére írd be a külön megkapott webhook secretet, majd mentsd el a fájlt.
+
+5. Csinálj egy teszt beküldést a 4-es Gravity Formon.
+
+6. Küldd el nekünk a teszt beküldés pontos idejét és azt, hogy sikeres volt-e az űrlap oldalon.
+
+7. Ha a WordPress oldalon lenne hiba, kérlek nézd meg, hogy került-e bejegyzés a PHP / WordPress error logba, mert a plugin hibánál logol.
+
+Fontos:
+- a plugin nem igényli a Gravity Forms fizetős Webhooks Add-Onját
+- a plugin `wp_remote_post()`-tal küldi az adatokat
+- a kérés `application/json` formátumú
+- a plugin csak a 4-es formra van most beállítva (`form_id => 4`)
+- a publikus webhook címe: `https://budaitancklub-registration-webhook.zsolt-3bf.workers.dev/webhooks/gravity-forms`
+
+Ha elküldöd a teszt eredményét, onnan tudunk továbbmenni.
+
+Köszi

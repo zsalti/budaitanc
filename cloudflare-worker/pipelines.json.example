@@ -1,0 +1,16 @@
+{
+  "pipelines": [
+    {
+      "pipeline_id": "tanctanfolyam_jelentkezes",
+      "adapter": "dance_course_registration",
+      "spreadsheet_id": "1hHlwBe_pK-Cdg7zoGFrd1adeTw8lYAMyZOCKZmzlcTs",
+      "tab_name": " TAGOK I FÉLÉV"
+    },
+    {
+      "pipeline_id": "tancverseny_jelentkezes",
+      "adapter": "replace_me",
+      "spreadsheet_id": "replace_me",
+      "tab_name": "replace_me"
+    }
+  ]
+}

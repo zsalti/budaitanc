@@ -1,0 +1,14 @@
+{
+  "name": "budaitancklub-registration-webhook",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "wrangler": "^4.25.0"
+  },
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "check": "node --check src/worker.js",
+    "test:smoke": "node test-smoke.mjs"
+  }
+}

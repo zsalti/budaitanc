@@ -1,0 +1,7 @@
+name = "budaitancklub-registration-webhook"
+main = "src/worker.js"
+compatibility_date = "2026-07-14"
+
+# Do not put secrets here. Set them with `wrangler secret put`.
+# PIPELINES_CONFIG_JSON can be a normal Worker variable because it contains no
+# credentials; it is intentionally set during the deployment steps instead.
