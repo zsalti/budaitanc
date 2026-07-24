@@ -1,0 +1,15 @@
+{
+  "pipeline_id": "tanctanfolyam_jelentkezes",
+  "drive_file_id": "REPLACE_WITH_THE_STABLE_GOOGLE_DRIVE_XLSX_FILE_ID",
+  "sheet_name": "Kivonat",
+  "columns": {
+    "transaction_id": ["Tranzakcióazonosító", "Transaction ID"],
+    "booking_date": ["Könyvelési dátum", "Booking date"],
+    "value_date": ["Értéknap", "Value date"],
+    "amount": ["Összeg", "Amount"],
+    "currency": ["Deviza", "Currency"],
+    "sender_name": ["Feladó neve", "Sender name"],
+    "sender_account": ["Feladó számlaszáma", "Sender account"],
+    "message": ["Közlemény", "Közlemények", "Message", "Remittance information"]
+  }
+}

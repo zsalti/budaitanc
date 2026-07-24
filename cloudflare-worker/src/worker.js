@@ -1,8 +1,14 @@
-const SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets";
+import * as XLSX from "xlsx";
+
+const GOOGLE_SCOPES = [
+  "https://www.googleapis.com/auth/spreadsheets",
+  "https://www.googleapis.com/auth/drive.readonly",
+].join(" ");
 const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const WEBHOOK_PATH = "/webhooks/gravity-forms";
 const IMPORT_PATH_PREFIX = "/import/";
 const SYNC_PATH_PREFIX = "/sync/";
+const PAYMENTS_PATH_PREFIX = "/payments/";
 const MASTER_MANUAL_START = 8; // I:L before the Közlemény column is inserted.
 const MASTER_MANUAL_END = 12;
 
@@ -51,6 +57,11 @@ export default {
     const syncToken = getProtectedPathToken(url.pathname, SYNC_PATH_PREFIX);
     if (syncToken !== null) {
       return handleSync(request, env, syncToken);
+    }
+
+    const paymentToken = getProtectedPathToken(url.pathname, PAYMENTS_PATH_PREFIX);
+    if (paymentToken !== null) {
+      return handlePaymentsImport(request, env, paymentToken);
     }
 
     if (url.pathname !== WEBHOOK_PATH) return json({ error: "not_found" }, 404);
@@ -114,6 +125,28 @@ async function handleImport(request, env, token) {
   }
 }
 
+async function handlePaymentsImport(request, env, token) {
+  if (!env.PAYMENT_IMPORT_TOKEN || !safeEqual(token, env.PAYMENT_IMPORT_TOKEN)) {
+    return json({ error: "not_found" }, 404);
+  }
+  if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
+
+  try {
+    let payload = {};
+    const raw = await request.text();
+    if (raw.trim()) payload = JSON.parse(raw);
+    const pipeline = getPipeline(env, text(payload.pipeline_id) || defaultPipelineId(env));
+    const source = getPaymentSource(env, pipeline.pipeline_id);
+    const accessToken = await getGoogleAccessToken(env.GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT);
+    const transactions = await downloadPaymentTransactions(accessToken, source);
+    const result = await importPayments(accessToken, pipeline, transactions);
+    return json({ status: "ok", pipeline_id: pipeline.pipeline_id, ...result });
+  } catch (error) {
+    console.error("Payment import failed", error);
+    return json({ error: "payment_import_failed", message: error.message || "Ismeretlen hiba." }, 500);
+  }
+}
+
 function getImportToken(pathname) {
   return getProtectedPathToken(pathname, IMPORT_PATH_PREFIX);
 }
@@ -171,6 +204,192 @@ async function handleSync(request, env, token) {
     console.error("Staff Sheet sync failed", error);
     return json({ error: "sync_failed" }, 500);
   }
+}
+
+function getPaymentSource(env, pipelineId) {
+  if (!env.PAYMENTS_SOURCE_CONFIG_JSON) throw new Error("Hiányzik a PAYMENTS_SOURCE_CONFIG_JSON beállítás.");
+  const config = JSON.parse(env.PAYMENTS_SOURCE_CONFIG_JSON);
+  const sources = Array.isArray(config) ? config : (config.sources || [config]);
+  const source = sources.find((item) => item.pipeline_id === pipelineId);
+  if (!source?.drive_file_id) throw new Error(`Nincs banki Excel-forrás beállítva ehhez: ${pipelineId}`);
+  return source;
+}
+
+async function downloadPaymentTransactions(accessToken, source) {
+  const url = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(source.drive_file_id)}?alt=media`;
+  const response = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+  if (!response.ok) throw new Error(`A banki Excel letöltése nem sikerült: ${response.status}`);
+  const workbook = XLSX.read(await response.arrayBuffer(), { type: "array", cellDates: false });
+  const sheetName = source.sheet_name || workbook.SheetNames[0];
+  const sheet = workbook.Sheets[sheetName];
+  if (!sheet) throw new Error(`Nem található a banki Excel munkalapja: ${sheetName}`);
+  const rows = XLSX.utils.sheet_to_json(sheet, { defval: "", raw: false });
+  if (!rows.length) throw new Error("A banki Excel nem tartalmaz adat-sort.");
+  return Promise.all(rows.map((row, index) => paymentFromRow(row, source.columns, index + 2)));
+}
+
+async function paymentFromRow(row, columns = {}, sourceRow) {
+  const get = (key, aliases) => valueForColumn(row, columns[key] || aliases);
+  const transactionId = get("transaction_id", ["Tranzakcióazonosító", "Transaction ID"]);
+  const bookingDate = get("booking_date", ["Könyvelési dátum", "Booking date"]);
+  const message = get("message", ["Közlemény", "Közlemények", "Message", "Remittance information"]);
+  if (!bookingDate) throw new Error(`Hiányzik a könyvelési dátum a banki Excel ${sourceRow}. sorából.`);
+  const payment = {
+    transactionId,
+    bookingDate,
+    valueDate: get("value_date", ["Értéknap", "Value date"]),
+    amount: get("amount", ["Összeg", "Amount"]),
+    currency: get("currency", ["Deviza", "Currency"]),
+    senderName: get("sender_name", ["Feladó neve", "Sender name"]),
+    senderAccount: get("sender_account", ["Feladó számlaszáma", "Sender account"]),
+    message,
+    sourceRow,
+  };
+  payment.sourceKey = transactionId ? `id:${transactionId}` : `hash:${await paymentFingerprint(payment)}`;
+  return payment;
+}
+
+function valueForColumn(row, aliases) {
+  const lookup = new Map(Object.keys(row).map((header) => [normalizeHeader(header), row[header]]));
+  for (const alias of aliases || []) {
+    const value = lookup.get(normalizeHeader(alias));
+    if (value !== undefined) return text(value);
+  }
+  return "";
+}
+
+async function paymentFingerprint(payment) {
+  const value = [payment.bookingDate, payment.valueDate, payment.amount, payment.currency, payment.senderName, payment.senderAccount, payment.message]
+    .map(normalizeForMatch).join("|");
+  const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)));
+  return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function importPayments(accessToken, pipeline, transactions) {
+  const masterRows = await readSheetRows(accessToken, pipeline.spreadsheet_id, pipeline.tab_name, "A:Z");
+  if (text(masterRows[0]?.[0]) !== "Közlemény") throw new Error("A fő Sheet első oszlopa nem Közlemény.");
+  const paymentSheets = await ensurePaymentSheets(accessToken, pipeline.spreadsheet_id);
+  const logRows = await readSheetRows(accessToken, pipeline.spreadsheet_id, paymentSheets.log, "A:K");
+  const pendingRows = await readSheetRows(accessToken, pipeline.spreadsheet_id, paymentSheets.pending, "A:K");
+  const registrations = masterRows.slice(1).map((row, index) => registrationForPayment(row, index + 2, pipeline.tab_name)).filter(Boolean);
+  const registrationsByReference = new Map(registrations.map((item) => [item.reference, item]));
+  const knownSources = new Set(logRows.slice(1).map((row) => text(row[0])).filter(Boolean));
+  const pendingBySource = new Map(pendingRows.slice(1).map((row, index) => [text(row[0]), { row, rowIndex: index + 2 }]).filter(([key]) => key));
+
+  const masterWrites = [];
+  const logWrites = [];
+  const pendingWrites = [];
+  const summary = { new_transactions: 0, booked: 0, already_recorded: 0, pending: 0, duplicates: 0, manually_resolved: 0 };
+
+  for (const pending of pendingBySource.values()) {
+    const manualReference = text(pending.row[8]);
+    if (!manualReference || !registrationsByReference.has(manualReference) || text(pending.row[9]).startsWith("Könyvelve")) continue;
+    const registration = registrationsByReference.get(manualReference);
+    const status = bookPaymentIfNeeded(registration, text(pending.row[1]), masterWrites);
+    pendingWrites.push({ range: `${quoteSheetName(paymentSheets.pending)}!J${pending.rowIndex}:K${pending.rowIndex}`, values: [["Könyvelve kézzel", new Date().toISOString()]] });
+    updateLogStatusWrite(logRows, paymentSheets.log, text(pending.row[0]), "Könyvelve kézzel", manualReference, logWrites);
+    summary.manually_resolved += 1;
+    if (status === "booked") summary.booked += 1; else summary.already_recorded += 1;
+  }
+
+  let logRowIndex = logRows.length + 1;
+  let pendingRowIndex = pendingRows.length + 1;
+  for (const payment of transactions) {
+    if (knownSources.has(payment.sourceKey)) { summary.duplicates += 1; continue; }
+    summary.new_transactions += 1;
+    const candidates = extractReferences(payment.message);
+    const matches = candidates.map((reference) => registrationsByReference.get(reference)).filter(Boolean);
+    let status;
+    let matchedReference = "";
+    if (matches.length === 1) {
+      matchedReference = matches[0].reference;
+      const result = bookPaymentIfNeeded(matches[0], payment.bookingDate, masterWrites);
+      status = result === "booked" ? "Könyvelve" : "Már rögzített";
+      if (result === "booked") summary.booked += 1; else summary.already_recorded += 1;
+    } else {
+      status = matches.length > 1 ? "Többértelmű" : "Függő";
+      const suggestions = nameSuggestions(payment.senderName, registrations);
+      pendingWrites.push({
+        range: `${quoteSheetName(paymentSheets.pending)}!A${pendingRowIndex}:K${pendingRowIndex}`,
+        values: [[payment.sourceKey, payment.bookingDate, payment.amount, payment.currency, payment.senderName, payment.senderAccount, payment.message, suggestions.join(" | "), "", status, ""]],
+      });
+      pendingRowIndex += 1;
+      summary.pending += 1;
+    }
+    logWrites.push({
+      range: `${quoteSheetName(paymentSheets.log)}!A${logRowIndex}:K${logRowIndex}`,
+      values: [[payment.sourceKey, payment.bookingDate, payment.amount, payment.currency, payment.senderName, payment.senderAccount, payment.message, candidates.join(", "), matchedReference, status, new Date().toISOString()]],
+    });
+    logRowIndex += 1;
+  }
+
+  if (masterWrites.length) await writeSheetRanges(accessToken, pipeline.spreadsheet_id, masterWrites);
+  if (logWrites.length) await writeSheetRanges(accessToken, pipeline.spreadsheet_id, logWrites);
+  if (pendingWrites.length) await writeSheetRanges(accessToken, pipeline.spreadsheet_id, pendingWrites);
+  return summary;
+}
+
+function registrationForPayment(row, rowIndex, masterTab) {
+  const reference = text(row[0]);
+  if (!reference) return null;
+  return { reference, rowIndex, masterTab, studentName: text(row[5]), parentName: text(row[17]), paidDate: text(row[9]) };
+}
+
+function bookPaymentIfNeeded(registration, bookingDate, masterWrites) {
+  if (registration.paidDate) return "already_recorded";
+  masterWrites.push({ range: `${quoteSheetName(registration.masterTab)}!J${registration.rowIndex}`, values: [[bookingDate]] });
+  registration.paidDate = bookingDate;
+  return "booked";
+}
+
+function extractReferences(message) {
+  return [...new Set((text(message).match(/(?<!\d)\d{1,7}(?!\d)/g) || []))];
+}
+
+function nameSuggestions(senderName, registrations) {
+  const surname = normalizedSurname(senderName);
+  if (!surname) return [];
+  const matches = [];
+  for (const registration of registrations) {
+    const reasons = [];
+    if (normalizedSurname(registration.studentName) === surname) reasons.push("Vezetéknév egyezik a növendék nevével");
+    if (normalizedSurname(registration.parentName) === surname) reasons.push("Vezetéknév egyezik a szülő/gondviselő nevével");
+    if (reasons.length) matches.push(`${registration.studentName} (${registration.reference}) — ${reasons.join(", ")}`);
+  }
+  return matches.slice(0, 3);
+}
+
+function normalizedSurname(name) { return normalizeForMatch(name).split(" ").filter(Boolean)[0] || ""; }
+function normalizeHeader(value) { return normalizeForMatch(value).replace(/[^a-z0-9]/g, ""); }
+function normalizeForMatch(value) { return text(value).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim(); }
+
+function updateLogStatusWrite(logRows, logTab, sourceKey, status, matchedReference, writes) {
+  const index = logRows.findIndex((row, rowIndex) => rowIndex > 0 && text(row[0]) === sourceKey);
+  if (index >= 0) writes.push({ range: `${quoteSheetName(logTab)}!I${index + 1}:K${index + 1}`, values: [[matchedReference, status, new Date().toISOString()]] });
+}
+
+async function ensurePaymentSheets(accessToken, spreadsheetId) {
+  const log = "Befizetések napló";
+  const pending = "Függő befizetések";
+  const metadata = await getSpreadsheetMetadata(accessToken, spreadsheetId);
+  const titles = new Set((metadata.sheets || []).map((sheet) => sheet.properties?.title));
+  const missing = [log, pending].filter((title) => !titles.has(title));
+  if (missing.length) {
+    const baseUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}`;
+    await googleFetch(`${baseUrl}:batchUpdate`, accessToken, {
+      method: "POST",
+      body: JSON.stringify({ requests: missing.map((title) => ({ addSheet: { properties: { title, gridProperties: { frozenRowCount: 1 } } } })) }),
+    });
+  }
+  const headers = {
+    [log]: ["Forrásazonosító", "Könyvelési dátum", "Összeg", "Deviza", "Feladó neve", "Feladó számlaszáma", "Eredeti közlemény", "Kinyert közleményjelöltek", "Párosított közlemény", "Státusz", "Feldolgozva"],
+    [pending]: ["Forrásazonosító", "Könyvelési dátum", "Összeg", "Deviza", "Feladó neve", "Feladó számlaszáma", "Eredeti közlemény", "Javaslatok", "Kézzel hozzárendelt közlemény", "Státusz", "Feldolgozva"],
+  };
+  for (const title of [log, pending]) {
+    const rows = await readSheetRows(accessToken, spreadsheetId, title, "A1:K1");
+    if (!rows.length || !text(rows[0]?.[0])) await writeSheetRanges(accessToken, spreadsheetId, [{ range: `${quoteSheetName(title)}!A1:K1`, values: [headers[title]] }]);
+  }
+  return { log, pending };
 }
 
 function parseCsv(csvText) {
@@ -413,6 +632,19 @@ async function readSheetRows(accessToken, spreadsheetId, tabName, columns) {
   return result.values || [];
 }
 
+async function writeSheetRanges(accessToken, spreadsheetId, data) {
+  const baseUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}`;
+  await googleFetch(`${baseUrl}/values:batchUpdate`, accessToken, {
+    method: "POST",
+    body: JSON.stringify({ valueInputOption: "RAW", data }),
+  });
+}
+
+async function getSpreadsheetMetadata(accessToken, spreadsheetId) {
+  const baseUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}`;
+  return googleFetch(`${baseUrl}?fields=sheets.properties(sheetId,title)`, accessToken);
+}
+
 async function deleteRowsByIndex(accessToken, target, rowIndexes) {
   const sheetId = await getSheetId(accessToken, target.spreadsheet_id, target.tab_name);
   const baseUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(target.spreadsheet_id)}`;
@@ -428,7 +660,7 @@ async function deleteRowsByIndex(accessToken, target, rowIndexes) {
 
 async function getSheetId(accessToken, spreadsheetId, tabName) {
   const baseUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}`;
-  const result = await googleFetch(`${baseUrl}?fields=sheets.properties(sheetId,title)`, accessToken);
+  const result = await getSpreadsheetMetadata(accessToken, spreadsheetId);
   const sheet = (result.sheets || []).find((item) => item.properties?.title === tabName);
   if (!sheet) throw new Error(`Nem található fül: ${tabName}`);
   return sheet.properties.sheetId;
@@ -448,7 +680,7 @@ async function getGoogleAccessToken(rawServiceAccount) {
 
 async function createJwt(serviceAccount, now) {
   const header = base64Url(JSON.stringify({ alg: "RS256", typ: "JWT" }));
-  const claim = base64Url(JSON.stringify({ iss: serviceAccount.client_email, scope: SHEETS_SCOPE, aud: GOOGLE_TOKEN_URL, iat: now, exp: now + 3600 }));
+  const claim = base64Url(JSON.stringify({ iss: serviceAccount.client_email, scope: GOOGLE_SCOPES, aud: GOOGLE_TOKEN_URL, iat: now, exp: now + 3600 }));
   const signed = `${header}.${claim}`;
   const privateKey = await crypto.subtle.importKey("pkcs8", pemToArrayBuffer(serviceAccount.private_key), { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["sign"]);
   const signature = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", privateKey, new TextEncoder().encode(signed));
@@ -459,7 +691,7 @@ async function googleFetch(url, accessToken, options = {}) {
   const response = await fetch(url, { ...options, headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json", ...(options.headers || {}) } });
   if (!response.ok) {
     const detail = await response.text();
-    throw new Error(`Google Sheets request failed: ${response.status} ${detail.slice(0, 500)}`);
+    throw new Error(`Google API request failed: ${response.status} ${detail.slice(0, 500)}`);
   }
   return response.json();
 }
@@ -491,4 +723,4 @@ function importResultPage(result, count) {
 
 function escapeHtml(value) { return String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char])); }
 
-export { CSV_HEADERS, findMasterRow, mergeMasterRow, parseCsv, parseCsvRegistrations, registrationFromCsvRow };
+export { CSV_HEADERS, extractReferences, findMasterRow, mergeMasterRow, nameSuggestions, normalizeForMatch, parseCsv, parseCsvRegistrations, paymentFromRow, registrationFromCsvRow };

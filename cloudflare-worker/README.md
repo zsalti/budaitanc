@@ -21,6 +21,7 @@ accounttal közvetlenül hívja, nincs szükség Google Cloud Runra.
    npx wrangler secret put GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT
    npx wrangler secret put IMPORT_ADMIN_TOKEN
    npx wrangler secret put SYNC_ADMIN_TOKEN
+   npx wrangler secret put PAYMENT_IMPORT_TOKEN
    ```
 
    A másodikhoz a Google service account JSON fájl **teljes tartalma** kell,
@@ -33,6 +34,19 @@ accounttal közvetlenül hívja, nincs szükség Google Cloud Runra.
    ```bash
    npx wrangler secret put PIPELINES_CONFIG_JSON
    ```
+
+   A banki Excelhez külön forrás-beállítás is kell. A
+   `payments-source.json.example` alapján készítsd el, majd secretként add meg:
+
+   ```bash
+   npx wrangler secret put PAYMENTS_SOURCE_CONFIG_JSON
+   ```
+
+   A `drive_file_id` mindig ugyanaz a Google Drive-fájl legyen. A friss banki
+   kivonatot ebbe a fájlba kell feltölteni/cserélni; így nem kell minden
+   érkeztetéskor konfigurációt módosítani. A fájlt oszd meg **olvasóként** a
+   `budaitancklub-reg@budaitancklub.iam.gserviceaccount.com` címmel, és a
+   Google Cloud projektben a Google Drive API is legyen engedélyezve.
 
    Ez nem érzékeny, de secretként kezeljük, hogy egyetlen helyen legyen a
    telepítési konfiguráció.
@@ -92,11 +106,37 @@ a Script Properties-ben történik. A szinkron fizikailag törli a munkatársi
 Sheetből azokat az azonosítóval ellátott sorokat, amelyek már nincsenek a fő
 Sheetben.
 
+## Befizetések érkeztetése
+
+A fő Sheethez kötött Apps Scriptben a `Budai Tánc → Befizetések érkeztetése`
+menüpont indítja a feldolgozást. Az első futás előtt a `Budai Tánc →
+Befizetési token beállítása` menüpontban egyszer meg kell adni a
+`PAYMENT_IMPORT_TOKEN` értékét.
+
+A Worker a megadott Drive-fájlból olvassa a banki `.xlsx`-et, majd:
+
+- a közleményben levő pontos, 1–7 számjegyes `Közlemény` azonosítót
+  automatikusan párosítja;
+- a fő Sheet J oszlopába csak üres fizetési dátum esetén ír;
+- minden beolvasott tételt a `Befizetések napló` fülön őriz meg;
+- a hibás, hiányzó vagy többértelmű közleményű tételeket a `Függő
+  befizetések` fülre teszi;
+- a függő fülben név alapján legfeljebb három javaslatot mutat. A név sosem
+  indít automatikus könyvelést;
+- a `Kézzel hozzárendelt közlemény` oszlopba írt érvényes azonosítót a
+  következő futáskor könyveli le.
+
+A banki fájl tényleges fejlécét a `payments-source.json.example` `columns`
+leképezésében lehet hozzáigazítani. A repositoryban levő
+`test-fixtures/minta-banki-kivonat.xlsx` teljesen anonim, és az elvárt
+munkalap-/oszlopstruktúrát szemlélteti.
+
 ## Tesztelés
 
 ```bash
 npm run check
 npm run test:smoke
+npm run generate:payment-fixture
 ```
 
 A `test-fixtures/dami-registration.csv` egy teljes, személyes adatot nem

@@ -1,14 +1,21 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
+import * as XLSX from "xlsx";
 import worker, {
   CSV_HEADERS,
+  extractReferences,
+  nameSuggestions,
   parseCsv,
   parseCsvRegistrations,
+  paymentFromRow,
 } from "./src/worker.js";
 
 const fixture = await fs.readFile(
   new URL("./test-fixtures/dami-registration.csv", import.meta.url),
   "utf8",
+);
+const paymentFixture = await fs.readFile(
+  new URL("./test-fixtures/minta-banki-kivonat.xlsx", import.meta.url),
 );
 
 const serviceAccount = await createTestServiceAccount();
@@ -35,17 +42,19 @@ const sheetState = [
 const staffState = [
   ["Közlemény", "Tanfolyam", "Nap és terem", "Óra ideje", "Táncpedagógusok", "Jelentkező (növendék) neve", "Jelentkezés ideje", "Tanfolyamon részvétel kezdete / naptár"],
 ];
+const paymentLogState = [["Forrásazonosító", "Könyvelési dátum", "Összeg", "Deviza", "Feladó neve", "Feladó számlaszáma", "Eredeti közlemény", "Kinyert közleményjelöltek", "Párosított közlemény", "Státusz", "Feldolgozva"]];
+const paymentPendingState = [["Forrásazonosító", "Könyvelési dátum", "Összeg", "Deviza", "Feladó neve", "Feladó számlaszáma", "Eredeti közlemény", "Javaslatok", "Kézzel hozzárendelt közlemény", "Státusz", "Feldolgozva"]];
 
 const originalFetch = globalThis.fetch;
 globalThis.fetch = async (input, options = {}) => {
   const url = String(input);
+  const decodedUrl = decodeURIComponent(url);
   if (url === "https://oauth2.googleapis.com/token") {
     return new Response(JSON.stringify({ access_token: "test-access-token" }), { status: 200 });
   }
   if (url.includes("/values:batchUpdate")) {
     const body = JSON.parse(options.body);
-    const state = url.includes("test-staff-spreadsheet") ? staffState : sheetState;
-    for (const item of body.data) applyRange(item.range, item.values[0], state);
+    for (const item of body.data) applyRange(item.range, item.values[0], stateForRange(item.range, url));
     return new Response(JSON.stringify({ totalUpdatedCells: body.data.length }), { status: 200 });
   }
   if (url.includes("test-staff-spreadsheet:batchUpdate")) {
@@ -59,8 +68,18 @@ globalThis.fetch = async (input, options = {}) => {
   if (url.includes("test-staff-spreadsheet?fields=")) {
     return new Response(JSON.stringify({ sheets: [{ properties: { sheetId: 42, title: "TAGOK 2026-27" } }] }), { status: 200 });
   }
+  if (url.includes("test-spreadsheet?fields=")) {
+    return new Response(JSON.stringify({ sheets: [
+      { properties: { sheetId: 1, title: " TAGOK I FÉLÉV" } },
+      { properties: { sheetId: 2, title: "Befizetések napló" } },
+      { properties: { sheetId: 3, title: "Függő befizetések" } },
+    ] }), { status: 200 });
+  }
+  if (url.includes("www.googleapis.com/drive/v3/files/test-payment-file?alt=media")) {
+    return new Response(paymentFixture, { status: 200 });
+  }
   if (url.includes("/values/")) {
-    return new Response(JSON.stringify({ values: url.includes("test-staff-spreadsheet") ? staffState : sheetState }), { status: 200 });
+    return new Response(JSON.stringify({ values: stateForRange(decodedUrl, url) }), { status: 200 });
   }
   return originalFetch(input, options);
 };
@@ -73,6 +92,20 @@ try {
   assert.equal(registrations.length, 1);
   assert.equal(registrations[0].row.length, 25);
   assert.equal(registrations[0].row[0], "MODERN TÁNC 10-14 ÉVES /SZERDA BERCZIK TEREM/17.00-18.00/TEST TANÁR");
+
+  const paymentWorkbook = XLSX.read(paymentFixture, { type: "buffer" });
+  const paymentRows = XLSX.utils.sheet_to_json(paymentWorkbook.Sheets.Kivonat, { defval: "", raw: false });
+  assert.equal(paymentRows.length, 5);
+  const payment = await paymentFromRow(paymentRows[0], {}, 2);
+  assert.equal(payment.sourceKey, "id:TX-2026-0001");
+  assert.deepEqual(extractReferences("Tandíj 9000001 / 9000002, 12345678"), ["9000001", "9000002"]);
+  assert.deepEqual(nameSuggestions("KISS Júlia", [
+    { reference: "9000001", studentName: "Kiss Beáta", parentName: "Nagy Márta" },
+    { reference: "9000002", studentName: "Kovács Lili", parentName: "Kiss János" },
+  ]), [
+    "Kiss Beáta (9000001) — Vezetéknév egyezik a növendék nevével",
+    "Kovács Lili (9000002) — Vezetéknév egyezik a szülő/gondviselő nevével",
+  ]);
 
   const health = await worker.fetch(new Request("https://example.test/healthz"), env);
   assert.equal(health.status, 200);
@@ -141,19 +174,58 @@ try {
   });
   assert.equal(staffState.some((row) => row[0] === "ORPHAN-ROW"), false);
 
+  sheetState.push(paymentMasterRow("9000001", "Kiss Beáta", "Kiss Júlia"));
+  sheetState.push(paymentMasterRow("9000002", "Nagy Bence", "Nagy Béla"));
+  const paymentImport = await worker.fetch(new Request("https://example.test/payments/test-payment-token", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pipeline_id: pipeline.pipeline_id }),
+  }), { ...env, PAYMENT_IMPORT_TOKEN: "test-payment-token", PAYMENTS_SOURCE_CONFIG_JSON: JSON.stringify({ pipeline_id: pipeline.pipeline_id, drive_file_id: "test-payment-file", sheet_name: "Kivonat" }) });
+  assert.equal(paymentImport.status, 200);
+  assert.deepEqual(await paymentImport.json(), {
+    status: "ok", pipeline_id: pipeline.pipeline_id, new_transactions: 5, booked: 2, already_recorded: 0, pending: 3, duplicates: 0, manually_resolved: 0,
+  });
+  assert.equal(sheetState.find((row) => row[0] === "9000001")[9], "2026-08-10");
+  assert.equal(paymentLogState.length, 6);
+  assert.equal(paymentPendingState.length, 4);
+  assert.match(paymentPendingState[1][7], /Kiss Beáta \(9000001\)/);
+
+  paymentPendingState[1][8] = "9000002";
+  const manualResolution = await worker.fetch(new Request("https://example.test/payments/test-payment-token", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pipeline_id: pipeline.pipeline_id }),
+  }), { ...env, PAYMENT_IMPORT_TOKEN: "test-payment-token", PAYMENTS_SOURCE_CONFIG_JSON: JSON.stringify({ pipeline_id: pipeline.pipeline_id, drive_file_id: "test-payment-file", sheet_name: "Kivonat" }) });
+  assert.equal(manualResolution.status, 200);
+  assert.equal((await manualResolution.json()).manually_resolved, 1);
+  assert.equal(paymentPendingState[1][9], "Könyvelve kézzel");
+
   console.log("Cloudflare Worker CSV/webhook smoke tests passed.");
 } finally {
   globalThis.fetch = originalFetch;
 }
 
 function applyRange(range, values, state) {
-  const match = range.match(/!([A-Z]+)(\d+):([A-Z]+)\d+$/);
+  const match = range.match(/!([A-Z]+)(\d+)(?::([A-Z]+)\d+)?$/);
   assert.ok(match, `Unexpected range: ${range}`);
   const startColumn = columnNumber(match[1]);
   const rowIndex = Number(match[2]) - 1;
   while (state.length <= rowIndex) state.push([]);
   const row = state[rowIndex];
   values.forEach((value, offset) => { row[startColumn + offset] = value; });
+}
+
+function stateForRange(range, url = "") {
+  const value = decodeURIComponent(range);
+  if (value.includes("Befizetések napló")) return paymentLogState;
+  if (value.includes("Függő befizetések")) return paymentPendingState;
+  return url.includes("test-staff-spreadsheet") ? staffState : sheetState;
+}
+
+function paymentMasterRow(reference, studentName, parentName) {
+  const row = Array.from({ length: 26 }, () => "");
+  row[0] = reference;
+  row[5] = studentName;
+  row[17] = parentName;
+  return row;
 }
 
 function columnNumber(column) {

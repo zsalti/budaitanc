@@ -2,6 +2,9 @@
   "name": "budaitancklub-registration-webhook",
   "private": true,
   "type": "module",
+  "dependencies": {
+    "xlsx": "^0.18.5"
+  },
   "devDependencies": {
     "wrangler": "^4.25.0"
   },
@@ -9,6 +12,7 @@
     "deploy": "wrangler deploy",
     "dev": "wrangler dev",
     "check": "node --check src/worker.js",
-    "test:smoke": "node test-smoke.mjs"
+    "test:smoke": "node test-smoke.mjs",
+    "generate:payment-fixture": "node scripts/generate-payment-fixture.mjs"
   }
 }
