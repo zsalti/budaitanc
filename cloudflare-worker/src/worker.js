@@ -9,8 +9,10 @@ const WEBHOOK_PATH = "/webhooks/gravity-forms";
 const IMPORT_PATH_PREFIX = "/import/";
 const SYNC_PATH_PREFIX = "/sync/";
 const PAYMENTS_PATH_PREFIX = "/payments/";
-const MASTER_MANUAL_START = 8; // I:L before the Közlemény column is inserted.
-const MASTER_MANUAL_END = 12;
+// Registration data ends at I. J:N are maintained manually in the master Sheet:
+// semester fee, payment date, membership card, notes, and alternate attendance.
+const MASTER_MANUAL_START = 8;
+const MASTER_MANUAL_END = 13;
 
 const CSV_HEADERS = [
   "Jelentkező (növendék) neve",
@@ -266,12 +268,13 @@ async function paymentFingerprint(payment) {
 }
 
 async function importPayments(accessToken, pipeline, transactions) {
-  const masterRows = await readSheetRows(accessToken, pipeline.spreadsheet_id, pipeline.tab_name, "A:Z");
+  const masterRows = await readSheetRows(accessToken, pipeline.spreadsheet_id, pipeline.tab_name, "A:AA");
   if (text(masterRows[0]?.[0]) !== "Közlemény") throw new Error("A fő Sheet első oszlopa nem Közlemény.");
+  const paymentColumns = paymentColumnIndexes(masterRows[0]);
   const paymentSheets = await ensurePaymentSheets(accessToken, pipeline.spreadsheet_id);
   const logRows = await readSheetRows(accessToken, pipeline.spreadsheet_id, paymentSheets.log, "A:K");
   const pendingRows = await readSheetRows(accessToken, pipeline.spreadsheet_id, paymentSheets.pending, "A:K");
-  const registrations = masterRows.slice(1).map((row, index) => registrationForPayment(row, index + 2, pipeline.tab_name)).filter(Boolean);
+  const registrations = masterRows.slice(1).map((row, index) => registrationForPayment(row, index + 2, pipeline.tab_name, paymentColumns)).filter(Boolean);
   const registrationsByReference = new Map(registrations.map((item) => [item.reference, item]));
   const knownSources = new Set(logRows.slice(1).map((row) => text(row[0])).filter(Boolean));
   const pendingBySource = new Map(pendingRows.slice(1).map((row, index) => [text(row[0]), { row, rowIndex: index + 2 }]).filter(([key]) => key));
@@ -329,15 +332,32 @@ async function importPayments(accessToken, pipeline, transactions) {
   return summary;
 }
 
-function registrationForPayment(row, rowIndex, masterTab) {
+function paymentColumnIndexes(header) {
+  const indexOf = (name) => header.findIndex((value) => text(value) === name);
+  const paymentDate = indexOf("I. féléves tandíjfizetés dátuma");
+  const studentName = indexOf("Jelentkező (növendék) neve");
+  const parentName = indexOf("Törvényes képviselő, szülő neve");
+  if (paymentDate < 0 || studentName < 0 || parentName < 0) {
+    throw new Error("Hiányzik egy szükséges fő Sheet fejléc: jelentkező neve, szülő neve vagy I. féléves tandíjfizetés dátuma.");
+  }
+  return { paymentDate, studentName, parentName };
+}
+
+function registrationForPayment(row, rowIndex, masterTab, columns) {
   const reference = text(row[0]);
   if (!reference) return null;
-  return { reference, rowIndex, masterTab, studentName: text(row[5]), parentName: text(row[17]), paidDate: text(row[9]) };
+  return {
+    reference, rowIndex, masterTab,
+    studentName: text(row[columns.studentName]),
+    parentName: text(row[columns.parentName]),
+    paidDate: text(row[columns.paymentDate]),
+    paymentDateColumn: columns.paymentDate,
+  };
 }
 
 function bookPaymentIfNeeded(registration, bookingDate, masterWrites) {
   if (registration.paidDate) return "already_recorded";
-  masterWrites.push({ range: `${quoteSheetName(registration.masterTab)}!J${registration.rowIndex}`, values: [[bookingDate]] });
+  masterWrites.push({ range: `${quoteSheetName(registration.masterTab)}!${columnLetter(registration.paymentDateColumn)}${registration.rowIndex}`, values: [[bookingDate]] });
   registration.paidDate = bookingDate;
   return "booked";
 }
@@ -362,6 +382,7 @@ function nameSuggestions(senderName, registrations) {
 function normalizedSurname(name) { return normalizeForMatch(name).split(" ").filter(Boolean)[0] || ""; }
 function normalizeHeader(value) { return normalizeForMatch(value).replace(/[^a-z0-9]/g, ""); }
 function normalizeForMatch(value) { return text(value).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim(); }
+function columnLetter(index) { let number = index + 1; let result = ""; while (number > 0) { const remainder = (number - 1) % 26; result = String.fromCharCode(65 + remainder) + result; number = Math.floor((number - 1) / 26); } return result; }
 
 function updateLogStatusWrite(logRows, logTab, sourceKey, status, matchedReference, writes) {
   const index = logRows.findIndex((row, rowIndex) => rowIndex > 0 && text(row[0]) === sourceKey);
@@ -453,7 +474,7 @@ function registrationFromCsvRow(row) {
     row: [
       courseName, course.venue, course.time, course.teacher, studentName, submittedAt,
       text(row["Részvétel kezdete"]), normalizeTrial(row["Próba órára jelentkezés"]),
-      "", "", "", "", text(row["Születési dátum"]), text(row["Lakcím"]), text(row["Telefon"]),
+      "", "", "", "", "", text(row["Születési dátum"]), text(row["Lakcím"]), text(row["Telefon"]),
       text(row["E-mail cím"]), text(row["Törvényes képviselő, szülő neve"]), text(row["Kerület Kártya száma"]),
       text(row["Kerület Kártya lejárati dátuma"]), text(row["Kerület Kártya fotója"]), text(row["Testvér neve"]),
       text(row["Testvér csoportja"]), text(row["Rendelkezik jóváírható összeggel"]), parseBilling(row["Kérek számlát az alábbi adatokkal"])[0],
@@ -472,7 +493,7 @@ function registrationFromPayload(adapter, payload) {
   return {
     entryId: text(payload.entry_id), studentName, submittedAt,
     row: [courseName, course.venue || text(payload.venue), course.time || text(payload.time), course.teacher || text(payload.teacher), studentName, submittedAt,
-      text(payload.start_date), normalizeTrial(payload.trial_signup), "", "", "", "", text(payload.birth_date), text(payload.address), text(payload.phone),
+      text(payload.start_date), normalizeTrial(payload.trial_signup), "", "", "", "", "", text(payload.birth_date), text(payload.address), text(payload.phone),
       text(payload.email), text(payload.parent_name), text(payload.district_card_number), text(payload.district_card_expiry), text(payload.district_card_photo),
       text(payload.sibling_name), text(payload.sibling_group), text(payload.carryover_amount), text(payload.billing_address), text(payload.billing_email)],
   };
@@ -500,7 +521,7 @@ async function writeRegistrationsToTargets(accessToken, pipeline, registrations)
 
 async function upsertMasterRegistrations(accessToken, pipeline, registrations) {
   const baseUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(pipeline.spreadsheet_id)}`;
-  const readRange = encodeURIComponent(`${quoteSheetName(pipeline.tab_name)}!A:Z`);
+  const readRange = encodeURIComponent(`${quoteSheetName(pipeline.tab_name)}!A:AA`);
   const current = await googleFetch(`${baseUrl}/values/${readRange}`, accessToken);
   const rows = current.values || [];
   const mutableRows = rows.map((row) => [...row]);
@@ -514,7 +535,7 @@ async function upsertMasterRegistrations(accessToken, pipeline, registrations) {
     const merged = mergeMasterRow(existing, registration);
     mutableRows[rowIndex - 1] = merged;
     data.push({ range: `${quoteSheetName(pipeline.tab_name)}!A${rowIndex}:I${rowIndex}`, values: [merged.slice(0, 9)] });
-    data.push({ range: `${quoteSheetName(pipeline.tab_name)}!N${rowIndex}:Z${rowIndex}`, values: [merged.slice(13, 26)] });
+    data.push({ range: `${quoteSheetName(pipeline.tab_name)}!O${rowIndex}:AA${rowIndex}`, values: [merged.slice(14, 27)] });
     results.push({ rowIndex, type: existing[5] ? "updated" : "created", studentName: registration.studentName });
   }
 
@@ -526,7 +547,7 @@ async function upsertMasterRegistrations(accessToken, pipeline, registrations) {
 }
 
 function mergeMasterRow(existing, registration) {
-  const merged = Array.from({ length: 26 }, (_, index) => existing[index] || "");
+  const merged = Array.from({ length: 27 }, (_, index) => existing[index] || "");
   merged[0] = registration.entryId || merged[0];
   registration.row.forEach((value, index) => {
     const targetIndex = index + 1;
@@ -581,14 +602,14 @@ function findStaffRow(rows, entryId) {
 }
 
 async function syncStaffTarget(accessToken, pipeline) {
-  const masterRows = await readSheetRows(accessToken, pipeline.spreadsheet_id, pipeline.tab_name, "A:Z");
+  const masterRows = await readSheetRows(accessToken, pipeline.spreadsheet_id, pipeline.tab_name, "A:AA");
   if (text(masterRows[0]?.[0]) !== "Közlemény") {
     throw new Error("A fő Sheet első oszlopának Közleménynek kell lennie.");
   }
 
   const registrations = masterRows.slice(1)
     .filter((row) => text(row[0]) && text(row[5]))
-    .map((row) => ({ entryId: text(row[0]), studentName: text(row[5]), submittedAt: text(row[6]), row: row.slice(1, 26) }));
+    .map((row) => ({ entryId: text(row[0]), studentName: text(row[5]), submittedAt: text(row[6]), row: row.slice(1, 27) }));
   const target = pipeline.staff_target;
   const staffRows = await readSheetRows(accessToken, target.spreadsheet_id, target.tab_name, "A:H");
   const masterIds = new Set(registrations.map((registration) => registration.entryId));

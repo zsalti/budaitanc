@@ -117,7 +117,7 @@ A Worker a megadott Drive-fájlból olvassa a banki `.xlsx`-et, majd:
 
 - a közleményben levő pontos, 1–7 számjegyes `Közlemény` azonosítót
   automatikusan párosítja;
-- a fő Sheet J oszlopába csak üres fizetési dátum esetén ír;
+- a fő Sheet `I. féléves tandíjfizetés dátuma` oszlopába csak üres fizetési dátum esetén ír (jelenleg K oszlop); a J oszlop az elvárt `I. féléves tandíj` összege;
 - minden beolvasott tételt a `Befizetések napló` fülön őriz meg;
 - a hibás, hiányzó vagy többértelmű közleményű tételeket a `Függő
   befizetések` fülre teszi;

@@ -37,7 +37,7 @@ const env = {
 };
 
 const sheetState = [
-  ["Közlemény", "Tanfolyam neve", "Nap és terem", "Óra ideje", "Táncpedagógusok", "Jelentkező (növendék) neve", "Jelentkezés ideje", "Tanfolyamon részvétel kezdete / naptár", "Próbaórára jelentkezés", "I", "J", "K", "L", "Születési dátum", "Lakcím", "Telefon", "E-mail cím", "Törvényes képviselő, szülő neve", "Kerület Kártya száma", "Kerület Kártya lejárati dátuma", "Kerület Kártya fotója", "Testvér neve", "Testvér csoportja", "Rendelkezik jóváírható összeggel", "Számlázási adatok", "Számlázási email"],
+  ["Közlemény", "Tanfolyam neve", "Nap és terem", "Óra ideje", "Táncpedagógusok", "Jelentkező (növendék) neve", "Jelentkezés ideje", "Tanfolyamon részvétel kezdete / naptár", "Próbaórára jelentkezés", "I. féléves tandíj", "I. féléves tandíjfizetés dátuma", "I. tagsági kiállítva", "Egyéb megjegyzés", "Más óraszámban jár", "Születési dátum", "Lakcím", "Telefon", "E-mail cím", "Törvényes képviselő, szülő neve", "Kerület Kártya száma", "Kerület Kártya lejárati dátuma", "Kerület Kártya fotója", "Testvér neve", "Testvér csoportja", "Rendelkezik jóváírható összeggel", "Számlázási adatok", "Számlázási email"],
 ];
 const staffState = [
   ["Közlemény", "Tanfolyam", "Nap és terem", "Óra ideje", "Táncpedagógusok", "Jelentkező (növendék) neve", "Jelentkezés ideje", "Tanfolyamon részvétel kezdete / naptár"],
@@ -90,7 +90,7 @@ try {
   assert.equal(CSV_HEADERS.length, 28);
   const registrations = parseCsvRegistrations(parsed);
   assert.equal(registrations.length, 1);
-  assert.equal(registrations[0].row.length, 25);
+  assert.equal(registrations[0].row.length, 26);
   assert.equal(registrations[0].row[0], "MODERN TÁNC 10-14 ÉVES /SZERDA BERCZIK TEREM/17.00-18.00/TEST TANÁR");
 
   const paymentWorkbook = XLSX.read(paymentFixture, { type: "buffer" });
@@ -125,10 +125,11 @@ try {
   assert.equal(staffState[1][0], "TEST-CODEX-20260723-001");
   assert.equal(staffState[1][5], "Codex Teszt Dami");
 
-  sheetState[1][9] = "KEEP-I";
-  sheetState[1][10] = "KEEP-J";
-  sheetState[1][11] = "KEEP-K";
-  sheetState[1][12] = "KEEP-L";
+  sheetState[1][9] = "KEEP-FEE";
+  sheetState[1][10] = "KEEP-PAYMENT-DATE";
+  sheetState[1][11] = "KEEP-MEMBERSHIP";
+  sheetState[1][12] = "KEEP-NOTE";
+  sheetState[1][13] = "KEEP-ATTENDANCE";
   const changedFixture = fixture.replace("1111 Budapest, Teszt utca 1.", "2222 Budapest, Módosított utca 2.");
   const form2 = new FormData();
   form2.append("file", new Blob([changedFixture], { type: "text/csv" }), "dami-registration.csv");
@@ -136,8 +137,8 @@ try {
   assert.equal(second.status, 200);
   assert.match(await second.text(), /Új: 0/);
   assert.equal(sheetState.length, 2);
-  assert.equal(sheetState[1][14], "2222 Budapest, Módosított utca 2.");
-  assert.deepEqual(sheetState[1].slice(9, 13), ["KEEP-I", "KEEP-J", "KEEP-K", "KEEP-L"]);
+  assert.equal(sheetState[1][15], "2222 Budapest, Módosított utca 2.");
+  assert.deepEqual(sheetState[1].slice(9, 14), ["KEEP-FEE", "KEEP-PAYMENT-DATE", "KEEP-MEMBERSHIP", "KEEP-NOTE", "KEEP-ATTENDANCE"]);
 
   const incomplete = new FormData();
   incomplete.append("file", new Blob(["name,email\nDami,dummy@example.invalid\n"], { type: "text/csv" }), "bad.csv");
@@ -184,7 +185,7 @@ try {
   assert.deepEqual(await paymentImport.json(), {
     status: "ok", pipeline_id: pipeline.pipeline_id, new_transactions: 5, booked: 2, already_recorded: 0, pending: 3, duplicates: 0, manually_resolved: 0,
   });
-  assert.equal(sheetState.find((row) => row[0] === "9000001")[9], "2026-08-10");
+  assert.equal(sheetState.find((row) => row[0] === "9000001")[10], "2026-08-10");
   assert.equal(paymentLogState.length, 6);
   assert.equal(paymentPendingState.length, 4);
   assert.match(paymentPendingState[1][7], /Kiss Beáta \(9000001\)/);
@@ -221,10 +222,10 @@ function stateForRange(range, url = "") {
 }
 
 function paymentMasterRow(reference, studentName, parentName) {
-  const row = Array.from({ length: 26 }, () => "");
+  const row = Array.from({ length: 27 }, () => "");
   row[0] = reference;
   row[5] = studentName;
-  row[17] = parentName;
+  row[18] = parentName;
   return row;
 }
 
