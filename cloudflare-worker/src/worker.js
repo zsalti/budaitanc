@@ -1,4 +1,6 @@
 import * as XLSX from "xlsx";
+import { AUTOMATION_STATUS, calculateRegistration, formatDate, parseAutomationConfig } from "./fee-engine.js";
+import { TEMPLATE_VERSION, createEmailDraft } from "./email-templates.js";
 
 const GOOGLE_SCOPES = [
   "https://www.googleapis.com/auth/spreadsheets",
@@ -9,8 +11,17 @@ const WEBHOOK_PATH = "/webhooks/gravity-forms";
 const IMPORT_PATH_PREFIX = "/import/";
 const SYNC_PATH_PREFIX = "/sync/";
 const PAYMENTS_PATH_PREFIX = "/payments/";
-// Registration data ends at I. J:N are maintained manually in the master Sheet:
-// semester fee, payment date, membership card, notes, and alternate attendance.
+const EMAIL_DRAFTS_PATH_PREFIX = "/emails/drafts/";
+const EMAIL_SEND_PATH_PREFIX = "/emails/send/";
+const AUTOMATION_CONFIG_TAB = "Automata kalk";
+const EMAIL_OUTPUT_TAB = "E-mail kimenet";
+const TRIAL_DATE_COLUMN = "AH";
+const AUTOMATION_START_COLUMN = "AI";
+const AUTOMATION_END_COLUMN = "AR";
+const BREVO_SEND_URL = "https://api.brevo.com/v3/smtp/email";
+const inFlightSends = new Set();
+// Registration data ends at I. Imports preserve J:N in the master Sheet:
+// J is calculated by the fee engine; K:N contain payment/admin fields.
 const MASTER_MANUAL_START = 8;
 const MASTER_MANUAL_END = 13;
 
@@ -66,6 +77,16 @@ export default {
       return handlePaymentsImport(request, env, paymentToken);
     }
 
+    const draftToken = getProtectedPathToken(url.pathname, EMAIL_DRAFTS_PATH_PREFIX);
+    if (draftToken !== null) {
+      return handleEmailDraftRefresh(request, env, draftToken);
+    }
+
+    const sendToken = getProtectedPathToken(url.pathname, EMAIL_SEND_PATH_PREFIX);
+    if (sendToken !== null) {
+      return handleApprovedEmailSend(request, env, sendToken);
+    }
+
     if (url.pathname !== WEBHOOK_PATH) return json({ error: "not_found" }, 404);
     if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
     if (!env.WEBHOOK_SHARED_SECRET ||
@@ -93,6 +114,7 @@ export default {
         pipeline_id: text(payload.pipeline_id),
         row_index: result.results[0].rowIndex,
         student_name: registration.studentName,
+        automation: result.automation?.[0] || null,
       });
     } catch (error) {
       console.error("Webhook processing failed", error);
@@ -147,6 +169,45 @@ async function handlePaymentsImport(request, env, token) {
     console.error("Payment import failed", error);
     return json({ error: "payment_import_failed", message: error.message || "Ismeretlen hiba." }, 500);
   }
+}
+
+async function handleEmailDraftRefresh(request, env, token) {
+  if (!env.EMAIL_ADMIN_TOKEN || !safeEqual(token, env.EMAIL_ADMIN_TOKEN)) {
+    return json({ error: "not_found" }, 404);
+  }
+  if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
+  try {
+    const payload = await optionalJson(request);
+    const pipeline = getPipeline(env, text(payload.pipeline_id) || defaultPipelineId(env));
+    const accessToken = await getGoogleAccessToken(env.GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT);
+    const automation = await refreshEmailDrafts(accessToken, pipeline, null);
+    return json({ status: "ok", pipeline_id: pipeline.pipeline_id, ...automation });
+  } catch (error) {
+    console.error("Email draft refresh failed", error);
+    return json({ error: "email_draft_refresh_failed", message: error.message || "Ismeretlen hiba." }, 500);
+  }
+}
+
+async function handleApprovedEmailSend(request, env, token) {
+  if (!env.EMAIL_ADMIN_TOKEN || !safeEqual(token, env.EMAIL_ADMIN_TOKEN)) {
+    return json({ error: "not_found" }, 404);
+  }
+  if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
+  try {
+    const payload = await optionalJson(request);
+    const pipeline = getPipeline(env, text(payload.pipeline_id) || defaultPipelineId(env));
+    const accessToken = await getGoogleAccessToken(env.GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT);
+    const result = await sendApprovedEmails(accessToken, pipeline, env);
+    return json({ status: "ok", pipeline_id: pipeline.pipeline_id, ...result });
+  } catch (error) {
+    console.error("Approved email send failed", error);
+    return json({ error: "email_send_failed", message: error.message || "Ismeretlen hiba." }, 500);
+  }
+}
+
+async function optionalJson(request) {
+  const raw = await request.text();
+  return raw.trim() ? JSON.parse(raw) : {};
 }
 
 function getImportToken(pathname) {
@@ -471,6 +532,7 @@ function registrationFromCsvRow(row) {
     entryId,
     studentName,
     submittedAt,
+    trialDate: text(row["Próbaóra dátuma"]),
     row: [
       courseName, course.venue, course.time, course.teacher, studentName, submittedAt,
       text(row["Részvétel kezdete"]), normalizeTrial(row["Próba órára jelentkezés"]),
@@ -491,7 +553,7 @@ function registrationFromPayload(adapter, payload) {
   const submittedAt = text(payload.submitted_at);
   if (!studentName || !submittedAt) throw new Error("Webhook payloadból hiányzik a név vagy a beküldési idő.");
   return {
-    entryId: text(payload.entry_id), studentName, submittedAt,
+    entryId: text(payload.entry_id), studentName, submittedAt, trialDate: text(payload.trial_date),
     row: [courseName, course.venue || text(payload.venue), course.time || text(payload.time), course.teacher || text(payload.teacher), studentName, submittedAt,
       text(payload.start_date), normalizeTrial(payload.trial_signup), "", "", "", "", "", text(payload.birth_date), text(payload.address), text(payload.phone),
       text(payload.email), text(payload.parent_name), text(payload.district_card_number), text(payload.district_card_expiry), text(payload.district_card_photo),
@@ -516,7 +578,17 @@ async function writeRegistrationsToTargets(accessToken, pipeline, registrations)
   if (pipeline.staff_target) {
     await upsertStaffRegistrations(accessToken, pipeline.staff_target, registrations);
   }
-  return masterResult;
+  if (pipeline.email_automation === false) return masterResult;
+  const entryIds = new Set(registrations.map((registration) => registration.entryId).filter(Boolean));
+  try {
+    const automation = await refreshEmailDrafts(accessToken, pipeline, entryIds);
+    return { ...masterResult, automation: automation.results };
+  } catch (error) {
+    console.error("Registration saved, but email automation failed", error);
+    const message = `Automatizmus futási hiba: ${error.message || "ismeretlen hiba"}`;
+    await markAutomationErrors(accessToken, pipeline, masterResult.results, message);
+    return { ...masterResult, automation: masterResult.results.map((item, index) => ({ entry_id: registrations[index]?.entryId || "", row_index: item.rowIndex, status: AUTOMATION_STATUS.ERROR, reason: message })) };
+  }
 }
 
 async function upsertMasterRegistrations(accessToken, pipeline, registrations) {
@@ -536,6 +608,7 @@ async function upsertMasterRegistrations(accessToken, pipeline, registrations) {
     mutableRows[rowIndex - 1] = merged;
     data.push({ range: `${quoteSheetName(pipeline.tab_name)}!A${rowIndex}:I${rowIndex}`, values: [merged.slice(0, 9)] });
     data.push({ range: `${quoteSheetName(pipeline.tab_name)}!O${rowIndex}:AA${rowIndex}`, values: [merged.slice(14, 27)] });
+    data.push({ range: `${quoteSheetName(pipeline.tab_name)}!${TRIAL_DATE_COLUMN}${rowIndex}`, values: [[registration.trialDate || ""]] });
     results.push({ rowIndex, type: existing[5] ? "updated" : "created", studentName: registration.studentName });
   }
 
@@ -644,6 +717,182 @@ async function syncStaffTarget(accessToken, pipeline) {
   if (deleteRows.length) await deleteRowsByIndex(accessToken, target, deleteRows);
 
   return { created, updated, deleted: deleteRows.length, total: registrations.length };
+}
+
+async function refreshEmailDrafts(accessToken, pipeline, entryIds = null) {
+  const masterRows = await readSheetRows(accessToken, pipeline.spreadsheet_id, pipeline.tab_name, "A:AR");
+  const configRows = await readSheetRows(accessToken, pipeline.spreadsheet_id, AUTOMATION_CONFIG_TAB, "A:Y");
+  const emailRows = await readSheetRows(accessToken, pipeline.spreadsheet_id, EMAIL_OUTPUT_TAB, "A:R");
+  if (text(masterRows[0]?.[0]) !== "Közlemény") throw new Error("A fő Sheet első oszlopa nem Közlemény.");
+  if (text(configRows[0]?.[0]) !== "Tanfolyam kulcs") throw new Error("Az Automata kalk órarend-fejléce hiányzik.");
+  if (text(emailRows[0]?.[0]) !== "Küldési kulcs") throw new Error("Az E-mail kimenet fejléce hiányzik.");
+
+  const config = parseAutomationConfig(configRows);
+  const mutableEmailRows = emailRows.map((row) => [...row]);
+  const writes = [];
+  const results = [];
+  const now = new Date().toISOString();
+
+  for (let index = 1; index < masterRows.length; index += 1) {
+    const row = masterRows[index] || [];
+    const entryId = text(row[0]);
+    if (!entryId || !text(row[5]) || (entryIds && !entryIds.has(entryId))) continue;
+    const registration = registrationFromMasterRow(row);
+    const calculation = calculateRegistration(registration, config);
+    const sourceHash = await sha256(JSON.stringify({ registration, calculation: serializableCalculation(calculation), templateVersion: TEMPLATE_VERSION }));
+    const mainRow = index + 1;
+    const firstClassValue = calculation.firstClass ? `${formatDate(calculation.firstClass.date)} ${calculation.firstClass.startTime}` : "";
+    const automationValues = [
+      firstClassValue, calculation.semester || "", calculation.feeBand || "", calculation.feeCategory || "",
+      calculation.discount || "", calculation.status, calculation.manualReason || "", sourceHash, TEMPLATE_VERSION, now,
+    ];
+    writes.push({ range: `${quoteSheetName(pipeline.tab_name)}!${AUTOMATION_START_COLUMN}${mainRow}:${AUTOMATION_END_COLUMN}${mainRow}`, values: [automationValues] });
+    if (calculation.status === AUTOMATION_STATUS.READY && !calculation.isTrial && calculation.fee) {
+      const feeColumn = calculation.semester === 2 ? "AC" : "J";
+      writes.push({ range: `${quoteSheetName(pipeline.tab_name)}!${feeColumn}${mainRow}`, values: [[calculation.fee]] });
+    }
+
+    const periodKey = emailPeriodKey(registration, calculation);
+    const sendKey = `${entryId}|${periodKey}|${TEMPLATE_VERSION}`;
+    const existingIndex = mutableEmailRows.findIndex((emailRow, emailIndex) => emailIndex > 0 && text(emailRow[0]) === sendKey);
+    const existing = existingIndex >= 0 ? mutableEmailRows[existingIndex] : [];
+    if (text(existing[15]) !== sourceHash) {
+      const draft = calculation.status === AUTOMATION_STATUS.READY ? createEmailDraft(registration, calculation) : { subject: "", plain: "", html: "" };
+      const queueStatus = text(existing[12]) === AUTOMATION_STATUS.SENT
+        ? AUTOMATION_STATUS.CHANGED_AFTER_SEND
+        : calculation.status;
+      const queueRow = [
+        sendKey, entryId, periodKey, TEMPLATE_VERSION, registration.email, draft.subject, draft.plain, draft.html,
+        firstClassValue, calculation.fee || "", calculation.explanation || calculation.manualReason || "", false,
+        queueStatus, text(existing[13]), "", sourceHash, now, text(existing[17]),
+      ];
+      const queueRowIndex = existingIndex >= 0 ? existingIndex + 1 : firstEmptyRow(mutableEmailRows, 1);
+      while (mutableEmailRows.length < queueRowIndex) mutableEmailRows.push([]);
+      mutableEmailRows[queueRowIndex - 1] = queueRow;
+      writes.push({ range: `${quoteSheetName(EMAIL_OUTPUT_TAB)}!A${queueRowIndex}:R${queueRowIndex}`, values: [queueRow] });
+    }
+
+    results.push({ entry_id: entryId, row_index: mainRow, status: calculation.status, reason: calculation.manualReason || "", fee: calculation.fee || "", first_class: firstClassValue });
+  }
+
+  if (writes.length) await writeSheetRanges(accessToken, pipeline.spreadsheet_id, writes);
+  return {
+    processed: results.length,
+    ready: results.filter((item) => item.status === AUTOMATION_STATUS.READY).length,
+    manual: results.filter((item) => item.status === AUTOMATION_STATUS.MANUAL).length,
+    results,
+  };
+}
+
+async function markAutomationErrors(accessToken, pipeline, results, message) {
+  const now = new Date().toISOString();
+  const data = results.map((item) => ({
+    range: `${quoteSheetName(pipeline.tab_name)}!AN${item.rowIndex}:AR${item.rowIndex}`,
+    values: [[AUTOMATION_STATUS.ERROR, message, "", TEMPLATE_VERSION, now]],
+  }));
+  if (data.length) await writeSheetRanges(accessToken, pipeline.spreadsheet_id, data);
+}
+
+function registrationFromMasterRow(row) {
+  return {
+    entryId: text(row[0]), courseRaw: text(row[1]), studentName: text(row[5]), submittedAt: text(row[6]),
+    startDate: text(row[7]), trialSignup: text(row[8]), alternateAttendance: text(row[13]), email: text(row[17]),
+    parentName: text(row[18]), districtCardNumber: text(row[19]), districtCardExpiry: text(row[20]),
+    siblingName: text(row[22]), siblingGroup: text(row[23]), carryoverAmount: text(row[24]) || text(row[27]),
+    trialDate: text(row[33]),
+  };
+}
+
+function serializableCalculation(calculation) {
+  return { ...calculation, firstClass: calculation.firstClass ? { ...calculation.firstClass, date: formatDate(calculation.firstClass.date) } : null };
+}
+
+function emailPeriodKey(registration, calculation) {
+  if (normalizeForMatch(registration.trialSignup) === "igen") return "PRÓBA";
+  if (calculation.semester) return String(calculation.semester);
+  const candidate = text(registration.startDate) || text(registration.submittedAt);
+  const month = Number((candidate.match(/^\d{4}[-./](\d{1,2})/) || [])[1]);
+  return month >= 2 && month <= 5 ? "2" : "1";
+}
+
+function firstEmptyRow(rows, keyColumn) {
+  for (let index = 1; index < rows.length; index += 1) if (!text(rows[index]?.[keyColumn - 1])) return index + 1;
+  return Math.max(2, rows.length + 1);
+}
+
+async function sendApprovedEmails(accessToken, pipeline, env) {
+  if (!env.BREVO_API_KEY || !env.BREVO_SENDER_EMAIL) throw new Error("Hiányzik a BREVO_API_KEY vagy a BREVO_SENDER_EMAIL Worker secret.");
+  await refreshEmailDrafts(accessToken, pipeline, null);
+  const rows = await readSheetRows(accessToken, pipeline.spreadsheet_id, EMAIL_OUTPUT_TAB, "A:R");
+  if (text(rows[0]?.[0]) !== "Küldési kulcs") throw new Error("Az E-mail kimenet fejléce hiányzik.");
+  let sent = 0;
+  let skipped = 0;
+  let failed = 0;
+
+  for (let index = 1; index < rows.length; index += 1) {
+    const row = rows[index] || [];
+    const sendKey = text(row[0]);
+    const approved = row[11] === true || ["true", "igen", "1"].includes(text(row[11]).toLowerCase());
+    const status = text(row[12]);
+    if (!sendKey || !approved || status === AUTOMATION_STATUS.SENT) { if (sendKey) skipped += 1; continue; }
+    // APPROVED is the durable "claimed for sending" marker. If a Worker dies
+    // after Brevo accepted the message but before the final Sheet write, a
+    // later click must not send the row again automatically.
+    if (![AUTOMATION_STATUS.READY, AUTOMATION_STATUS.CHANGED_AFTER_SEND].includes(status)) { skipped += 1; continue; }
+    if (inFlightSends.has(sendKey)) { skipped += 1; continue; }
+
+    const rowIndex = index + 1;
+    inFlightSends.add(sendKey);
+    try {
+      if (!text(row[4]) || !text(row[5]) || (!text(row[6]) && !text(row[7]))) throw new Error("Hiányzik a címzett, tárgy vagy levéltörzs.");
+      await writeSheetRanges(accessToken, pipeline.spreadsheet_id, [
+        { range: `${quoteSheetName(EMAIL_OUTPUT_TAB)}!L${rowIndex}:M${rowIndex}`, values: [[false, AUTOMATION_STATUS.APPROVED]] },
+      ]);
+      const brevo = await sendBrevoEmail(env, { to: text(row[4]), subject: text(row[5]), plain: text(row[6]), html: text(row[7]), sendKey });
+      await writeSheetRanges(accessToken, pipeline.spreadsheet_id, [
+        { range: `${quoteSheetName(EMAIL_OUTPUT_TAB)}!M${rowIndex}:R${rowIndex}`, values: [[AUTOMATION_STATUS.SENT, brevo.messageId || "", "", text(row[15]), new Date().toISOString(), new Date().toISOString()]] },
+      ]);
+      sent += 1;
+    } catch (error) {
+      failed += 1;
+      await writeSheetRanges(accessToken, pipeline.spreadsheet_id, [
+        { range: `${quoteSheetName(EMAIL_OUTPUT_TAB)}!M${rowIndex}:O${rowIndex}`, values: [[AUTOMATION_STATUS.ERROR, "", error.message || "Ismeretlen hiba."]] },
+      ]);
+    } finally {
+      inFlightSends.delete(sendKey);
+    }
+  }
+  return { sent, skipped, failed };
+}
+
+async function sendBrevoEmail(env, message) {
+  const idempotencyKey = await deterministicUuid(message.sendKey);
+  const response = await fetch(BREVO_SEND_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "api-key": env.BREVO_API_KEY },
+    body: JSON.stringify({
+      sender: { email: env.BREVO_SENDER_EMAIL, name: env.BREVO_SENDER_NAME || "Budai Táncklub" },
+      to: [{ email: message.to }], subject: message.subject, textContent: message.plain,
+      htmlContent: message.html || undefined,
+      headers: { "Idempotency-Key": idempotencyKey, "X-BudaiTanc-Send-Key": message.sendKey },
+    }),
+  });
+  if (!response.ok) throw new Error(`Brevo küldési hiba (${response.status}): ${(await response.text()).slice(0, 300)}`);
+  return response.json();
+}
+
+async function deterministicUuid(value) {
+  const hex = await sha256(value);
+  const chars = hex.slice(0, 32).split("");
+  chars[12] = "4";
+  chars[16] = ["8", "9", "a", "b"][parseInt(chars[16], 16) % 4];
+  const compact = chars.join("");
+  return `${compact.slice(0, 8)}-${compact.slice(8, 12)}-${compact.slice(12, 16)}-${compact.slice(16, 20)}-${compact.slice(20)}`;
+}
+
+async function sha256(value) {
+  const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(String(value))));
+  return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 async function readSheetRows(accessToken, spreadsheetId, tabName, columns) {

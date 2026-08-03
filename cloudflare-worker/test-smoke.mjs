@@ -24,6 +24,7 @@ const pipeline = {
   adapter: "dance_course_registration",
   spreadsheet_id: "test-spreadsheet",
   tab_name: " TAGOK I FÉLÉV",
+  email_automation: false,
   staff_target: {
     spreadsheet_id: "test-staff-spreadsheet",
     tab_name: "TAGOK 2026-27",
@@ -34,6 +35,9 @@ const env = {
   WEBHOOK_SHARED_SECRET: "test-webhook-secret",
   GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT: JSON.stringify(serviceAccount),
   PIPELINES_CONFIG_JSON: JSON.stringify({ pipelines: [pipeline] }),
+  EMAIL_ADMIN_TOKEN: "test-email-token",
+  BREVO_API_KEY: "test-brevo-key",
+  BREVO_SENDER_EMAIL: "sender@example.invalid",
 };
 
 const sheetState = [
@@ -44,13 +48,26 @@ const staffState = [
 ];
 const paymentLogState = [["Forrásazonosító", "Könyvelési dátum", "Összeg", "Deviza", "Feladó neve", "Feladó számlaszáma", "Eredeti közlemény", "Kinyert közleményjelöltek", "Párosított közlemény", "Státusz", "Feldolgozva"]];
 const paymentPendingState = [["Forrásazonosító", "Könyvelési dátum", "Összeg", "Deviza", "Feladó neve", "Feladó számlaszáma", "Eredeti közlemény", "Javaslatok", "Kézzel hozzárendelt közlemény", "Státusz", "Feldolgozva"]];
+const automationConfigState = [[
+  "Tanfolyam kulcs", "GF pontos érték / alias", "Nap", "Kezdés", "Befejezés", "Helyszín", "Tanár", "Heti alkalom", "Perc/alkalom", "Díjkategória", "Kézi elbírálás",
+  "", "Félév", "Sáv kezdete", "Sáv vége", "Díjkategória", "Alapár", "Kedvezményes ár", "", "Tanfolyam kulcs", "Dátum", "Típus", "Kezdés", "Befejezés", "Helyszín",
+], [
+  "TESZT TÁNC", "TESZT TÁNC/PÉNTEK HAJÓS TEREM/17.00-18.00/TESZT TANÁR", "PÉNTEK", "17:00", "18:00", "Hajós terem", "Teszt Tanár", 1, 60, "1x60", false,
+  "", 1, "2026-09-03", "2026-09-30", "1x60", 43000, 40850,
+]];
+const emailOutputState = [["Küldési kulcs", "Bejegyzésazonosító", "Félév / típus", "Sablonverzió", "Címzett", "Tárgy", "Szöveges levél", "HTML levél", "Első óra", "Összeg", "Számítás / indok", "Jóváhagyva", "Státusz", "Brevo messageId", "Hiba", "Forrás hash", "Frissítve", "Elküldve"]];
 
 const originalFetch = globalThis.fetch;
+const brevoRequests = [];
 globalThis.fetch = async (input, options = {}) => {
   const url = String(input);
   const decodedUrl = decodeURIComponent(url);
   if (url === "https://oauth2.googleapis.com/token") {
     return new Response(JSON.stringify({ access_token: "test-access-token" }), { status: 200 });
+  }
+  if (url === "https://api.brevo.com/v3/smtp/email") {
+    brevoRequests.push(JSON.parse(options.body));
+    return new Response(JSON.stringify({ messageId: "test-brevo-message-id" }), { status: 201 });
   }
   if (url.includes("/values:batchUpdate")) {
     const body = JSON.parse(options.body);
@@ -92,6 +109,7 @@ try {
   assert.equal(registrations.length, 1);
   assert.equal(registrations[0].row.length, 26);
   assert.equal(registrations[0].row[0], "MODERN TÁNC 10-14 ÉVES /SZERDA BERCZIK TEREM/17.00-18.00/TEST TANÁR");
+  assert.equal(registrations[0].trialDate, "");
 
   const paymentWorkbook = XLSX.read(paymentFixture, { type: "buffer" });
   const paymentRows = XLSX.utils.sheet_to_json(paymentWorkbook.Sheets.Kivonat, { defval: "", raw: false });
@@ -155,12 +173,14 @@ try {
       course_name: "MODERN TÁNC 10-14 ÉVES /SZERDA BERCZIK TEREM/17.00-18.00/TEST TANÁR",
       student_name: "Codex Webhook Teszt",
       submitted_at: "2026-07-23 22:00:00",
+      trial_date: "2026-09-18",
     }),
   }), env);
   assert.equal(webhook.status, 200);
   assert.equal(sheetState[2][1], "MODERN TÁNC 10-14 ÉVES /SZERDA BERCZIK TEREM/17.00-18.00/TEST TANÁR");
   assert.equal(sheetState[2][5], "Codex Webhook Teszt");
   assert.equal(sheetState[2][0], "TEST-WEBHOOK-001");
+  assert.equal(sheetState[2][33], "2026-09-18");
   assert.equal(staffState[2][0], "TEST-WEBHOOK-001");
 
   staffState.push(["ORPHAN-ROW", "Törölt", "", "", "", "", "", ""]);
@@ -199,6 +219,45 @@ try {
   assert.equal((await manualResolution.json()).manually_resolved, 1);
   assert.equal(paymentPendingState[1][9], "Könyvelve kézzel");
 
+  const readyRow = Array.from({ length: 44 }, () => "");
+  readyRow[0] = "TEST-EMAIL-001";
+  readyRow[1] = "TESZT TÁNC/PÉNTEK HAJÓS TEREM/17.00-18.00/TESZT TANÁR";
+  readyRow[5] = "Teszt Elek";
+  readyRow[6] = "2026-09-15 12:00:00";
+  readyRow[8] = "nem";
+  readyRow[17] = "recipient@example.invalid";
+  readyRow[18] = "Minta Anna";
+  sheetState.push(readyRow);
+  const drafts = await worker.fetch(new Request("https://example.test/emails/drafts/test-email-token", {
+    method: "POST", body: JSON.stringify({ pipeline_id: pipeline.pipeline_id }),
+  }), env);
+  assert.equal(drafts.status, 200);
+  const readyEmail = emailOutputState.find((row) => row[1] === "TEST-EMAIL-001");
+  assert.equal(readyEmail[12], "KÜLDHETŐ");
+  readyEmail[11] = true;
+  const send = await worker.fetch(new Request("https://example.test/emails/send/test-email-token", {
+    method: "POST", body: JSON.stringify({ pipeline_id: pipeline.pipeline_id }),
+  }), env);
+  assert.equal(send.status, 200);
+  assert.equal((await send.json()).sent, 1);
+  assert.equal(brevoRequests.length, 1);
+  assert.match(brevoRequests[0].headers["Idempotency-Key"], /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  assert.equal(brevoRequests[0].headers["X-BudaiTanc-Send-Key"], readyEmail[0]);
+  assert.equal(readyEmail[12], "ELKÜLDVE");
+  assert.equal(readyEmail[13], "test-brevo-message-id");
+  const duplicateSend = await worker.fetch(new Request("https://example.test/emails/send/test-email-token", {
+    method: "POST", body: JSON.stringify({ pipeline_id: pipeline.pipeline_id }),
+  }), env);
+  assert.equal((await duplicateSend.json()).sent, 0);
+  assert.equal(brevoRequests.length, 1);
+  readyRow[7] = "2026-09-18";
+  const changedDraft = await worker.fetch(new Request("https://example.test/emails/drafts/test-email-token", {
+    method: "POST", body: JSON.stringify({ pipeline_id: pipeline.pipeline_id }),
+  }), env);
+  assert.equal(changedDraft.status, 200);
+  assert.equal(readyEmail[12], "ELKÜLDÉS UTÁN MÓDOSULT");
+  assert.equal(readyEmail[11], false);
+
   console.log("Cloudflare Worker CSV/webhook smoke tests passed.");
 } finally {
   globalThis.fetch = originalFetch;
@@ -216,6 +275,8 @@ function applyRange(range, values, state) {
 
 function stateForRange(range, url = "") {
   const value = decodeURIComponent(range);
+  if (value.includes("Automata kalk")) return automationConfigState;
+  if (value.includes("E-mail kimenet")) return emailOutputState;
   if (value.includes("Befizetések napló")) return paymentLogState;
   if (value.includes("Függő befizetések")) return paymentPendingState;
   return url.includes("test-staff-spreadsheet") ? staffState : sheetState;

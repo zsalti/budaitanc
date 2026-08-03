@@ -22,6 +22,10 @@ accounttal közvetlenül hívja, nincs szükség Google Cloud Runra.
    npx wrangler secret put IMPORT_ADMIN_TOKEN
    npx wrangler secret put SYNC_ADMIN_TOKEN
    npx wrangler secret put PAYMENT_IMPORT_TOKEN
+   npx wrangler secret put EMAIL_ADMIN_TOKEN
+   npx wrangler secret put BREVO_API_KEY
+   npx wrangler secret put BREVO_SENDER_EMAIL
+   npx wrangler secret put BREVO_SENDER_NAME
    ```
 
    A másodikhoz a Google service account JSON fájl **teljes tartalma** kell,
@@ -131,18 +135,44 @@ leképezésében lehet hozzáigazítani. A repositoryban levő
 `test-fixtures/minta-banki-kivonat.xlsx` teljesen anonim, és az elvárt
 munkalap-/oszlopstruktúrát szemlélteti.
 
+## Díjszámítás és e-mail-piszkozatok
+
+A Worker az `Automata kalk` fül strukturált órarendjéből, díjsávjaiból és
+kivételeiből számol. Új webhook/CSV rekord után automatikusan frissíti a fő
+Sheet AH:AR automatizálási mezőit és az `E-mail kimenet` piszkozatát.
+
+- A próbaóra díja fix 2600 Ft, és a `Próbaóra dátuma` szerinti órát ellenőrzi.
+- Tanfolyamnál a jelentkezés és a kért kezdés közül a későbbi naptól keresi az
+  első órát; ennek napja választ díjsávot.
+- A J vagy AC díjmezőt csak egyértelmű, küldhető számítás írja.
+- Pilates, Berczik, jóváírás, eltérő óraszám, hibás kedvezmény vagy hiányzó
+  adat `KÉZI ELBÍRÁLÁS` státuszt kap.
+- Az `E-mail kimenet` szerkeszthető. Küldés csak a `Jóváhagyva` checkbox után,
+  a `Budai Tánc → Jóváhagyott e-mailek küldése` menüből történik.
+- A küldési kulcsból képzett Brevo `Idempotency-Key` és a tartós
+  `JÓVÁHAGYVA` feldolgozási jelző védi a sort a megszakadt vagy ismételt
+  küldéstől.
+- A Brevo kulcs kizárólag Worker secret lehet. A beszélgetésben vagy más
+  nyilvános helyen megjelent kulcsot vissza kell vonni, és új kulcsot kell
+  létrehozni.
+
+Az Apps Script első használatakor a `Budai Tánc → E-mail token beállítása`
+menüben az `EMAIL_ADMIN_TOKEN` értékét kell megadni. A `BREVO_API_KEY` nem
+kerül az Apps Scriptbe.
+
 ## Tesztelés
 
 ```bash
 npm run check
+npm run test:fee
 npm run test:smoke
 npm run generate:payment-fixture
 ```
 
 A `test-fixtures/dami-registration.csv` egy teljes, személyes adatot nem
 tartalmazó dummy export. A smoke teszt ellenőrzi az új rekord beszúrását, az
-azonos rekord frissítését, az I:L mezők megőrzését, a hibás fejléc elutasítását
-és a webhook 25 oszlopos mappelését. Production smoke teszt esetén a
+azonos rekord frissítését, a J:N mezők megőrzését, a hibás fejléc elutasítását,
+a próbaóradátum mappelését és az idempotens Brevo-kérést. Production smoke teszt esetén a
 `TEST-CODEX-20260723-001` és `TEST-WEBHOOK-001` azonosítókat a végén célzottan
 ellenőrizni és törölni kell.
 

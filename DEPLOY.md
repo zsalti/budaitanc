@@ -11,6 +11,10 @@ Cloud Run target:
    - `GOOGLE_SHEETS_SPREADSHEET_ID`
    - `GOOGLE_SHEETS_TAB_NAME`
    - `GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT` if the platform stores the service account as a secret value
+   - `EMAIL_ADMIN_TOKEN`
+   - `BREVO_API_KEY` (new, rotated key only)
+   - `BREVO_SENDER_EMAIL` (verified Brevo sender)
+   - `BREVO_SENDER_NAME`
 3. Prefer attached service account identity on Cloud Run.
    - Do not set `GOOGLE_SERVICE_ACCOUNT_JSON` in production unless you must.
 4. Expose `/webhooks/gravity-forms` to the WordPress plugin.

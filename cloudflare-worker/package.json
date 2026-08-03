@@ -12,6 +12,7 @@
     "deploy": "wrangler deploy",
     "dev": "wrangler dev",
     "check": "node --check src/worker.js",
+    "test:fee": "node test-fee-engine.mjs",
     "test:smoke": "node test-smoke.mjs",
     "generate:payment-fixture": "node scripts/generate-payment-fixture.mjs"
   }

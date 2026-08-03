@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Budai Tanc Gravity Forms Webhook Relay
  * Description: Sends Gravity Forms submissions to an external webhook without the paid Gravity Forms Webhooks add-on.
- * Version: 1.0.2
+ * Version: 1.1.0
  */
 
 if (!defined('ABSPATH')) {
@@ -23,6 +23,7 @@ define('BUDAI_TANC_WEBHOOK_PIPELINES', array(
             'submitted_at' => array('type' => 'entry', 'key' => 'date_created'),
             'start_date' => array('type' => 'field', 'label' => 'Részvétel kezdete'),
             'trial_signup' => array('type' => 'field', 'label' => 'Próba órára jelentkezés'),
+            'trial_date' => array('type' => 'field', 'label' => 'Próbaóra dátuma'),
             'birth_date' => array('type' => 'field', 'label' => 'Születési dátum'),
             'address' => array('type' => 'field', 'label' => 'Lakcím'),
             'phone' => array('type' => 'field', 'label' => 'Telefon'),

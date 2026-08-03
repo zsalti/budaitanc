@@ -53,7 +53,7 @@ def read_existing_rows(service, spreadsheet_id: str, tab_name: str) -> list[list
     result = (
         service.spreadsheets()
         .values()
-        .get(spreadsheetId=spreadsheet_id, range=f"'{tab_name}'!A:Z")
+        .get(spreadsheetId=spreadsheet_id, range=f"'{tab_name}'!A:AR")
         .execute()
     )
     return result.get("values", [])
@@ -103,14 +103,12 @@ def write_registrations(
     for row_index, registration in pending_updates:
         existing = existing_rows[row_index - 1] if row_index - 1 < len(existing_rows) else []
         merged = list(registration.sheet_row)
-        for column in range(9, 13):
-            if column < len(existing):
-                merged[column] = existing[column]
-        data.append(
-            {
-                "range": f"'{tab_name}'!A{row_index}:Z{row_index}",
-                "values": [merged],
-            }
+        data.extend(
+            [
+                {"range": f"'{tab_name}'!A{row_index}:I{row_index}", "values": [merged[:9]]},
+                {"range": f"'{tab_name}'!O{row_index}:AA{row_index}", "values": [merged[14:27]]},
+                {"range": f"'{tab_name}'!AH{row_index}", "values": [[registration.trial_date]]},
+            ]
         )
     (
         service.spreadsheets()
@@ -139,7 +137,7 @@ def prepare_updates(
             mutable_rows.append([])
         existing = mutable_rows[target_row - 1]
         merged = list(registration.sheet_row)
-        for column in range(9, 13):
+        for column in range(9, 14):
             if column < len(existing):
                 merged[column] = existing[column]
         mutable_rows[target_row - 1] = merged

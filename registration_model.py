@@ -5,6 +5,8 @@ from typing import Protocol
 
 
 class SheetRecord(Protocol):
+    trial_date: str
+
     @property
     def sheet_row(self) -> list[str]: ...
 
@@ -26,6 +28,7 @@ class Registration:
     submitted_at: str
     start_date: str
     trial_signup: str
+    trial_date: str
     birth_date: str
     address: str
     phone: str
@@ -42,8 +45,8 @@ class Registration:
 
     @property
     def sheet_row(self) -> list[str]:
-        # Columns follow the current Google Sheet layout after inserting
-        # the course name as column A and "Próbaórára jelentkezés" after start date.
+        # A:AA mirrors the active master Sheet. J:N are intentionally blank
+        # because they are preserved by the writer as manual/financial fields.
         return [
             self.reference_id,  # A - Közlemény / Gravity Forms ID
             self.course_name,  # B
@@ -54,23 +57,24 @@ class Registration:
             self.submitted_at,  # G
             self.start_date,  # H
             self.trial_signup,  # I
-            "",  # J - I. féléves tandíjfizetés dátuma
-            "",  # K - I. tagsági kiállítva
-            "",  # L - Egyéb megjegyzés
-            "",  # M - Más óraszámban jár
-            self.birth_date,  # N
-            self.address,  # O
-            self.phone,  # P
-            self.email,  # Q
-            self.parent_name,  # R
-            self.district_card_number,  # S
-            self.district_card_expiry,  # T
-            self.district_card_photo,  # U
-            self.sibling_name,  # V
-            self.sibling_group,  # W
-            self.carryover_amount,  # X
-            self.billing_address,  # Y
-            self.billing_email,  # Z
+            "",  # J - I. féléves tandíj
+            "",  # K - I. féléves tandíjfizetés dátuma
+            "",  # L - I. tagsági kiállítva
+            "",  # M - Egyéb megjegyzés
+            "",  # N - Más óraszámban jár
+            self.birth_date,  # O
+            self.address,  # P
+            self.phone,  # Q
+            self.email,  # R
+            self.parent_name,  # S
+            self.district_card_number,  # T
+            self.district_card_expiry,  # U
+            self.district_card_photo,  # V
+            self.sibling_name,  # W
+            self.sibling_group,  # X
+            self.carryover_amount,  # Y
+            self.billing_address,  # Z
+            self.billing_email,  # AA
         ]
 
     @property
