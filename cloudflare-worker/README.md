@@ -149,6 +149,9 @@ Sheet AH:AR automatizálási mezőit és az `E-mail kimenet` piszkozatát.
   adat `KÉZI ELBÍRÁLÁS` státuszt kap.
 - Az `E-mail kimenet` szerkeszthető. Küldés csak a `Jóváhagyva` checkbox után,
   a `Budai Tánc → Jóváhagyott e-mailek küldése` menüből történik.
+- A `Manuálisan elküldve` checkbox rögzíti a kézzel kiküldött levelet,
+  időbélyeget és kezelőt ír, zöldre színezi a sort, és kizárja azt a Brevo
+  küldési köréből. A jelölés visszavonásakor az előző státusz áll vissza.
 - A küldési kulcsból képzett Brevo `Idempotency-Key` és a tartós
   `JÓVÁHAGYVA` feldolgozási jelző védi a sort a megszakadt vagy ismételt
   küldéstől.

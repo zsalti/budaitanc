@@ -55,7 +55,7 @@ const automationConfigState = [[
   "TESZT TÁNC", "TESZT TÁNC/PÉNTEK HAJÓS TEREM/17.00-18.00/TESZT TANÁR", "PÉNTEK", "17:00", "18:00", "Hajós terem", "Teszt Tanár", 1, 60, "1x60", false,
   "", 1, "2026-09-03", "2026-09-30", "1x60", 43000, 40850,
 ]];
-const emailOutputState = [["Küldési kulcs", "Bejegyzésazonosító", "Félév / típus", "Sablonverzió", "Címzett", "Tárgy", "Szöveges levél", "HTML levél", "Első óra", "Összeg", "Számítás / indok", "Jóváhagyva", "Státusz", "Brevo messageId", "Hiba", "Forrás hash", "Frissítve", "Elküldve"]];
+const emailOutputState = [["Küldési kulcs", "Bejegyzésazonosító", "Félév / típus", "Sablonverzió", "Címzett", "Tárgy", "Szöveges levél", "HTML levél", "Első óra", "Összeg", "Számítás / indok", "Jóváhagyva", "Státusz", "Brevo messageId", "Hiba", "Forrás hash", "Frissítve", "Elküldve", "Manuálisan elküldve", "Manuális küldés időpontja", "Manuális küldés megjegyzése / küldője"]];
 
 const originalFetch = globalThis.fetch;
 const brevoRequests = [];
@@ -234,6 +234,29 @@ try {
   assert.equal(drafts.status, 200);
   const readyEmail = emailOutputState.find((row) => row[1] === "TEST-EMAIL-001");
   assert.equal(readyEmail[12], "KÜLDHETŐ");
+  readyEmail[12] = "ELKÜLDVE";
+  readyEmail[13] = "MANUÁLIS";
+  readyEmail[18] = true;
+  readyEmail[19] = "2026-08-04 12:00:00";
+  readyEmail[20] = "operator@example.invalid";
+  readyRow[7] = "2026-09-18";
+  const changedWhileManual = await worker.fetch(new Request("https://example.test/emails/drafts/test-email-token", {
+    method: "POST", body: JSON.stringify({ pipeline_id: pipeline.pipeline_id }),
+  }), env);
+  assert.equal(changedWhileManual.status, 200);
+  assert.equal(readyEmail[12], "ELKÜLDÉS UTÁN MÓDOSULT");
+  assert.equal(readyEmail[18], true);
+  assert.equal(readyEmail[19], "2026-08-04 12:00:00");
+  assert.equal(readyEmail[20], "operator@example.invalid");
+  readyEmail[11] = true;
+  readyEmail[12] = "KÜLDHETŐ";
+  const manualBlocked = await worker.fetch(new Request("https://example.test/emails/send/test-email-token", {
+    method: "POST", body: JSON.stringify({ pipeline_id: pipeline.pipeline_id }),
+  }), env);
+  assert.equal((await manualBlocked.json()).sent, 0);
+  assert.equal(brevoRequests.length, 0);
+  readyEmail[18] = false;
+  readyEmail[13] = "";
   readyEmail[11] = true;
   const send = await worker.fetch(new Request("https://example.test/emails/send/test-email-token", {
     method: "POST", body: JSON.stringify({ pipeline_id: pipeline.pipeline_id }),
@@ -250,7 +273,7 @@ try {
   }), env);
   assert.equal((await duplicateSend.json()).sent, 0);
   assert.equal(brevoRequests.length, 1);
-  readyRow[7] = "2026-09-18";
+  readyRow[7] = "2026-09-25";
   const changedDraft = await worker.fetch(new Request("https://example.test/emails/drafts/test-email-token", {
     method: "POST", body: JSON.stringify({ pipeline_id: pipeline.pipeline_id }),
   }), env);

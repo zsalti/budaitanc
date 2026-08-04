@@ -722,7 +722,7 @@ async function syncStaffTarget(accessToken, pipeline) {
 async function refreshEmailDrafts(accessToken, pipeline, entryIds = null) {
   const masterRows = await readSheetRows(accessToken, pipeline.spreadsheet_id, pipeline.tab_name, "A:AR");
   const configRows = await readSheetRows(accessToken, pipeline.spreadsheet_id, AUTOMATION_CONFIG_TAB, "A:Y");
-  const emailRows = await readSheetRows(accessToken, pipeline.spreadsheet_id, EMAIL_OUTPUT_TAB, "A:R");
+  const emailRows = await readSheetRows(accessToken, pipeline.spreadsheet_id, EMAIL_OUTPUT_TAB, "A:U");
   if (text(masterRows[0]?.[0]) !== "Közlemény") throw new Error("A fő Sheet első oszlopa nem Közlemény.");
   if (text(configRows[0]?.[0]) !== "Tanfolyam kulcs") throw new Error("Az Automata kalk órarend-fejléce hiányzik.");
   if (text(emailRows[0]?.[0]) !== "Küldési kulcs") throw new Error("Az E-mail kimenet fejléce hiányzik.");
@@ -746,6 +746,9 @@ async function refreshEmailDrafts(accessToken, pipeline, entryIds = null) {
       firstClassValue, calculation.semester || "", calculation.feeBand || "", calculation.feeCategory || "",
       calculation.discount || "", calculation.status, calculation.manualReason || "", sourceHash, TEMPLATE_VERSION, now,
     ];
+    if (calculation.status === AUTOMATION_STATUS.READY && calculation.isTrial && !text(registration.trialDate)) {
+      writes.push({ range: `${quoteSheetName(pipeline.tab_name)}!${TRIAL_DATE_COLUMN}${mainRow}`, values: [[formatDate(calculation.firstClass.date)]] });
+    }
     writes.push({ range: `${quoteSheetName(pipeline.tab_name)}!${AUTOMATION_START_COLUMN}${mainRow}:${AUTOMATION_END_COLUMN}${mainRow}`, values: [automationValues] });
     if (calculation.status === AUTOMATION_STATUS.READY && !calculation.isTrial && calculation.fee) {
       const feeColumn = calculation.semester === 2 ? "AC" : "J";
@@ -758,18 +761,20 @@ async function refreshEmailDrafts(accessToken, pipeline, entryIds = null) {
     const existing = existingIndex >= 0 ? mutableEmailRows[existingIndex] : [];
     if (text(existing[15]) !== sourceHash) {
       const draft = calculation.status === AUTOMATION_STATUS.READY ? createEmailDraft(registration, calculation) : { subject: "", plain: "", html: "" };
-      const queueStatus = text(existing[12]) === AUTOMATION_STATUS.SENT
+      const manualSent = isChecked(existing[18]);
+      const queueStatus = text(existing[12]) === AUTOMATION_STATUS.SENT || manualSent
         ? AUTOMATION_STATUS.CHANGED_AFTER_SEND
         : calculation.status;
       const queueRow = [
         sendKey, entryId, periodKey, TEMPLATE_VERSION, registration.email, draft.subject, draft.plain, draft.html,
         firstClassValue, calculation.fee || "", calculation.explanation || calculation.manualReason || "", false,
         queueStatus, text(existing[13]), "", sourceHash, now, text(existing[17]),
+        manualSent, text(existing[19]), text(existing[20]),
       ];
       const queueRowIndex = existingIndex >= 0 ? existingIndex + 1 : firstEmptyRow(mutableEmailRows, 1);
       while (mutableEmailRows.length < queueRowIndex) mutableEmailRows.push([]);
       mutableEmailRows[queueRowIndex - 1] = queueRow;
-      writes.push({ range: `${quoteSheetName(EMAIL_OUTPUT_TAB)}!A${queueRowIndex}:R${queueRowIndex}`, values: [queueRow] });
+      writes.push({ range: `${quoteSheetName(EMAIL_OUTPUT_TAB)}!A${queueRowIndex}:U${queueRowIndex}`, values: [queueRow] });
     }
 
     results.push({ entry_id: entryId, row_index: mainRow, status: calculation.status, reason: calculation.manualReason || "", fee: calculation.fee || "", first_class: firstClassValue });
@@ -823,7 +828,7 @@ function firstEmptyRow(rows, keyColumn) {
 async function sendApprovedEmails(accessToken, pipeline, env) {
   if (!env.BREVO_API_KEY || !env.BREVO_SENDER_EMAIL) throw new Error("Hiányzik a BREVO_API_KEY vagy a BREVO_SENDER_EMAIL Worker secret.");
   await refreshEmailDrafts(accessToken, pipeline, null);
-  const rows = await readSheetRows(accessToken, pipeline.spreadsheet_id, EMAIL_OUTPUT_TAB, "A:R");
+  const rows = await readSheetRows(accessToken, pipeline.spreadsheet_id, EMAIL_OUTPUT_TAB, "A:U");
   if (text(rows[0]?.[0]) !== "Küldési kulcs") throw new Error("Az E-mail kimenet fejléce hiányzik.");
   let sent = 0;
   let skipped = 0;
@@ -834,7 +839,8 @@ async function sendApprovedEmails(accessToken, pipeline, env) {
     const sendKey = text(row[0]);
     const approved = row[11] === true || ["true", "igen", "1"].includes(text(row[11]).toLowerCase());
     const status = text(row[12]);
-    if (!sendKey || !approved || status === AUTOMATION_STATUS.SENT) { if (sendKey) skipped += 1; continue; }
+    const manualSent = isChecked(row[18]);
+    if (!sendKey || !approved || manualSent || status === AUTOMATION_STATUS.SENT) { if (sendKey) skipped += 1; continue; }
     // APPROVED is the durable "claimed for sending" marker. If a Worker dies
     // after Brevo accepted the message but before the final Sheet write, a
     // later click must not send the row again automatically.
@@ -975,6 +981,7 @@ function pemToArrayBuffer(pem) {
 
 function quoteSheetName(name) { return `'${String(name ?? "").replace(/'/g, "''")}'`; }
 function normalizeTrial(value) { const normalized = text(value).toLowerCase(); return normalized === "igen" || normalized === "nem" ? normalized : ""; }
+function isChecked(value) { return value === true || ["true", "igen", "1"].includes(text(value).toLowerCase()); }
 function text(value) { return value == null ? "" : String(value).trim(); }
 function base64Url(value) { const bytes = typeof value === "string" ? new TextEncoder().encode(value) : new Uint8Array(value); let binary = ""; for (const byte of bytes) binary += String.fromCharCode(byte); return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, ""); }
 function safeEqual(left, right) { if (left.length !== right.length) return false; let result = 0; for (let i = 0; i < left.length; i += 1) result |= left.charCodeAt(i) ^ right.charCodeAt(i); return result === 0; }

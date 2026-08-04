@@ -83,9 +83,14 @@ export function calculateRegistration(registration, config) {
   let firstClass;
   if (isTrial) {
     const trialDate = parseDate(registration.trialDate);
-    if (!trialDate) return manual("Hiányzik a próbaóra dátuma.", { courseKey, isTrial });
-    firstClass = sessionOnExactDate(trialDate, sessions, config.exceptions);
-    if (!firstClass) return manual("A megadott próbaóranapon nincs megtartható foglalkozás.", { courseKey, isTrial });
+    if (trialDate) {
+      firstClass = sessionOnExactDate(trialDate, sessions, config.exceptions);
+      if (!firstClass) return manual("A megadott próbaóranapon nincs megtartható foglalkozás.", { courseKey, isTrial });
+    } else {
+      const nextClass = nextEligibleSession(registration, sessions, config);
+      if (nextClass.manualReason) return manual(nextClass.manualReason, { courseKey, isTrial });
+      firstClass = nextClass.firstClass;
+    }
     return readyResult({
       courseKey, isTrial, firstClass, semester: semesterForDate(firstClass.date),
       feeBand: "Próbaóra", feeCategory: "PRÓBAÓRA", discount: "Nincs", fee: TRIAL_FEE,
@@ -93,17 +98,9 @@ export function calculateRegistration(registration, config) {
     });
   }
 
-  const submittedDate = parseDate(registration.submittedAt);
-  if (!submittedDate) return manual("Hiányzik vagy hibás a jelentkezés dátuma.", { courseKey });
-  const requestedStart = parseDate(registration.startDate);
-  let anchor = requestedStart && requestedStart > submittedDate ? requestedStart : submittedDate;
-  if (!semesterForDate(anchor)) {
-    const nextEnrollmentStart = config.fees.map((fee) => fee.start).filter((date) => date >= anchor).sort((left, right) => left - right)[0];
-    if (!nextEnrollmentStart) return manual("A megadott kezdés után nincs új belépési időszak.", { courseKey });
-    anchor = nextEnrollmentStart;
-  }
-  firstClass = nextSession(anchor, sessions, config.exceptions);
-  if (!firstClass) return manual("Nem található következő megtartható óra.", { courseKey });
+  const nextClass = nextEligibleSession(registration, sessions, config);
+  if (nextClass.manualReason) return manual(nextClass.manualReason, { courseKey });
+  firstClass = nextClass.firstClass;
 
   const semester = semesterForDate(firstClass.date);
   if (!semester) return manual("Az első óra nem tartozik felvételi időszakhoz.", { courseKey, firstClass });
@@ -149,6 +146,20 @@ function courseAliases(key) {
   if (key === normalizeCourseKey("MŰVÉSZI TORNA ÓVODÁS 4+")) aliases.push(normalizeCourseKey("MŰVÉSZI TORNA ÓVODÁS 4 ÉVESEK"));
   if (key === normalizeCourseKey("KLASSZIKUS BALETT GYERMEK 6-8 ÉVESEK")) aliases.push(normalizeCourseKey("KLASSZIKUS BALETT ÓVODÁS 4,5 ÉVES KORTÓL"));
   return [...new Set(aliases)];
+}
+
+function nextEligibleSession(registration, sessions, config) {
+  const submittedDate = parseDate(registration.submittedAt);
+  if (!submittedDate) return { manualReason: "Hiányzik vagy hibás a jelentkezés dátuma." };
+  const requestedStart = parseDate(registration.startDate);
+  let anchor = requestedStart && requestedStart > submittedDate ? requestedStart : submittedDate;
+  if (!semesterForDate(anchor)) {
+    const nextEnrollmentStart = config.fees.map((fee) => fee.start).filter((date) => date >= anchor).sort((left, right) => left - right)[0];
+    if (!nextEnrollmentStart) return { manualReason: "A megadott kezdés után nincs új belépési időszak." };
+    anchor = nextEnrollmentStart;
+  }
+  const firstClass = nextSession(anchor, sessions, config.exceptions);
+  return firstClass ? { firstClass } : { manualReason: "Nem található következő megtartható óra." };
 }
 
 function sessionOnExactDate(date, sessions, exceptions) {

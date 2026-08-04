@@ -42,7 +42,8 @@ assert.equal(summerSignup.feeBand, "2026-09-03–2026-09-15");
 
 const aliasConfig = parseAutomationConfig([["KLASSZIKUS BALETT ÓVODÁS 4,5 ÉVES KORTÓL", "", "KEDD", "17:15", "18:00", "Berczik terem", "Tanár", 2, 45, "2x45", false]]);
 const aliasResult = calculateRegistration({ ...base, courseRaw: "KLASSZIKUS BALETT GYERMEK 6-8 ÉVESEK/KEDD, CSÜTÖRTÖK BERCZIK TEREM/17.15-18.00/TANÁR", trialSignup: "igen", trialDate: "" }, aliasConfig);
-assert.equal(aliasResult.manualReason, "Hiányzik a próbaóra dátuma.");
+assert.equal(aliasResult.status, AUTOMATION_STATUS.READY);
+assert.equal(aliasResult.firstClass.date.toISOString().slice(0, 10), "2026-09-15");
 
 const sibling = calculateRegistration({ ...base, siblingName: "Teszt Béla", siblingGroup: "Péntek" }, noException);
 assert.equal(sibling.fee, 36311);
