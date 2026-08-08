@@ -141,7 +141,15 @@ async function handleImport(request, env, token) {
     const registrations = parseCsvRegistrations(parsed);
     const pipeline = getPipeline(env, text(form.get("pipeline_id")) || defaultPipelineId(env));
     const accessToken = await getGoogleAccessToken(env.GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT);
-    const result = await writeRegistrationsToTargets(accessToken, pipeline, registrations);
+    const { newRegistrations, skippedRegistrations } = await filterManualImportRegistrations(
+      accessToken,
+      pipeline,
+      registrations,
+    );
+    const result = newRegistrations.length
+      ? await writeRegistrationsToTargets(accessToken, pipeline, newRegistrations)
+      : { results: [] };
+    result.skipped = skippedRegistrations;
     return html(importResultPage(result, registrations.length));
   } catch (error) {
     console.error("CSV import failed", error);
@@ -517,6 +525,35 @@ function parseCsvRegistrations(rows) {
   if (errors.length) throw new Error(errors.join("\n"));
   if (!registrations.length) throw new Error("A CSV nem tartalmaz adat-sort.");
   return registrations;
+}
+
+async function filterManualImportRegistrations(accessToken, pipeline, registrations) {
+  const [masterRows, emailRows] = await Promise.all([
+    readSheetRows(accessToken, pipeline.spreadsheet_id, pipeline.tab_name, "A:A"),
+    pipeline.email_automation === false
+      ? Promise.resolve([])
+      : readSheetRows(accessToken, pipeline.spreadsheet_id, EMAIL_OUTPUT_TAB, "B:B"),
+  ]);
+  return partitionManualImportRegistrations(masterRows, emailRows, registrations);
+}
+
+function partitionManualImportRegistrations(masterRows, emailRows, registrations) {
+  const knownEntryIds = new Set([
+    ...masterRows.slice(1).map((row) => text(row[0])),
+    ...emailRows.slice(1).map((row) => text(row[0])),
+  ].filter(Boolean));
+  const newRegistrations = [];
+  const skippedRegistrations = [];
+
+  for (const registration of registrations) {
+    if (knownEntryIds.has(registration.entryId)) {
+      skippedRegistrations.push(registration);
+      continue;
+    }
+    knownEntryIds.add(registration.entryId);
+    newRegistrations.push(registration);
+  }
+  return { newRegistrations, skippedRegistrations };
 }
 
 function registrationFromCsvRow(row) {
@@ -994,10 +1031,10 @@ function importPage(message = "", status = 200) {
 
 function importResultPage(result, count) {
   const created = result.results.filter((item) => item.type === "created").length;
-  const updated = result.results.filter((item) => item.type === "updated").length;
-  return `<!doctype html><meta charset="utf-8"><title>Import kész</title><style>body{font:16px system-ui;max-width:680px;margin:48px auto;padding:0 20px}main{border:1px solid #ddd;border-radius:12px;padding:24px}</style><main><h1>Import elkészült</h1><p>${count} rekord feldolgozva.</p><ul><li>Új: ${created}</li><li>Frissített: ${updated}</li></ul><p>A Google Sheet frissítése befejeződött.</p></main>`;
+  const skipped = result.skipped?.length || 0;
+  return `<!doctype html><meta charset="utf-8"><title>Import kész</title><style>body{font:16px system-ui;max-width:680px;margin:48px auto;padding:0 20px}main{border:1px solid #ddd;border-radius:12px;padding:24px}</style><main><h1>Import elkészült</h1><p>${count} rekord feldolgozva.</p><ul><li>Új: ${created}</li><li>Kihagyva (már létező Gravity Forms ID): ${skipped}</li></ul><p>A Google Sheet frissítése befejeződött.</p></main>`;
 }
 
 function escapeHtml(value) { return String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char])); }
 
-export { CSV_HEADERS, extractReferences, findMasterRow, mergeMasterRow, nameSuggestions, normalizeForMatch, parseCsv, parseCsvRegistrations, paymentFromRow, registrationFromCsvRow };
+export { CSV_HEADERS, extractReferences, findMasterRow, mergeMasterRow, nameSuggestions, normalizeForMatch, parseCsv, parseCsvRegistrations, partitionManualImportRegistrations, paymentFromRow, registrationFromCsvRow };

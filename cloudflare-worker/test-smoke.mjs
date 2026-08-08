@@ -7,6 +7,7 @@ import worker, {
   nameSuggestions,
   parseCsv,
   parseCsvRegistrations,
+  partitionManualImportRegistrations,
   paymentFromRow,
 } from "./src/worker.js";
 
@@ -111,6 +112,27 @@ try {
   assert.equal(registrations[0].row[0], "MODERN TÁNC 10-14 ÉVES /SZERDA BERCZIK TEREM/17.00-18.00/TEST TANÁR");
   assert.equal(registrations[0].trialDate, "");
 
+  assert.deepEqual(
+    partitionManualImportRegistrations(
+      [["header"], ["EXISTING-IN-MASTER"]],
+      [["header"], ["EXISTING-IN-EMAIL"]],
+      [
+        { entryId: "EXISTING-IN-MASTER" },
+        { entryId: "EXISTING-IN-EMAIL" },
+        { entryId: "NEW-ID" },
+        { entryId: "NEW-ID" },
+      ],
+    ),
+    {
+      newRegistrations: [{ entryId: "NEW-ID" }],
+      skippedRegistrations: [
+        { entryId: "EXISTING-IN-MASTER" },
+        { entryId: "EXISTING-IN-EMAIL" },
+        { entryId: "NEW-ID" },
+      ],
+    },
+  );
+
   const paymentWorkbook = XLSX.read(paymentFixture, { type: "buffer" });
   const paymentRows = XLSX.utils.sheet_to_json(paymentWorkbook.Sheets.Kivonat, { defval: "", raw: false });
   assert.equal(paymentRows.length, 5);
@@ -153,9 +175,11 @@ try {
   form2.append("file", new Blob([changedFixture], { type: "text/csv" }), "dami-registration.csv");
   const second = await worker.fetch(new Request("https://example.test/import/test-import-token", { method: "POST", body: form2 }), env);
   assert.equal(second.status, 200);
-  assert.match(await second.text(), /Új: 0/);
+  const secondResult = await second.text();
+  assert.match(secondResult, /Új: 0/);
+  assert.match(secondResult, /Kihagyva \(már létező Gravity Forms ID\): 1/);
   assert.equal(sheetState.length, 2);
-  assert.equal(sheetState[1][15], "2222 Budapest, Módosított utca 2.");
+  assert.equal(sheetState[1][15], "1111 Budapest, Teszt utca 1.");
   assert.deepEqual(sheetState[1].slice(9, 14), ["KEEP-FEE", "KEEP-PAYMENT-DATE", "KEEP-MEMBERSHIP", "KEEP-NOTE", "KEEP-ATTENDANCE"]);
 
   const incomplete = new FormData();
