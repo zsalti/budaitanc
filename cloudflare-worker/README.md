@@ -26,6 +26,8 @@ accounttal közvetlenül hívja, nincs szükség Google Cloud Runra.
    npx wrangler secret put BREVO_API_KEY
    npx wrangler secret put BREVO_SENDER_EMAIL
    npx wrangler secret put BREVO_SENDER_NAME
+   npx wrangler secret put BREVO_REPLY_TO_EMAIL
+   npx wrangler secret put BREVO_WEBHOOK_SECRET
    ```
 
    A másodikhoz a Google service account JSON fájl **teljes tartalma** kell,
@@ -147,14 +149,24 @@ Sheet AH:AR automatizálási mezőit és az `E-mail kimenet` piszkozatát.
 - A J vagy AC díjmezőt csak egyértelmű, küldhető számítás írja.
 - Pilates, Berczik, jóváírás, eltérő óraszám, hibás kedvezmény vagy hiányzó
   adat `KÉZI ELBÍRÁLÁS` státuszt kap.
-- Az `E-mail kimenet` szerkeszthető. Küldés csak a `Jóváhagyva` checkbox után,
+- Első használatkor a `Budai Tánc → E-mail lapok inicializálása` menüpont
+  létrehozza/frissíti az `E-mail kimenet`, `E-mail beállítások` és `E-mail
+  eseménynapló` lapokat, valamint a két keresztnév-segédoszlop fejlécét.
+- Az `E-mail kimenet` a teljes tárgyat, szöveges és HTML-változatot mutatja.
+  Szerkeszthető, de minden tartalmi/sablonparaméter-módosítás törli a korábbi
+  jóváhagyást. Küldés csak a `Jóváhagyva` checkbox után,
   a `Budai Tánc → Jóváhagyott e-mailek küldése` menüből történik.
 - A `Manuálisan elküldve` checkbox rögzíti a kézzel kiküldött levelet,
   időbélyeget és kezelőt ír, zöldre színezi a sort, és kizárja azt a Brevo
   küldési köréből. A jelölés visszavonásakor az előző státusz áll vissza.
-- A küldési kulcsból képzett Brevo `Idempotency-Key` és a tartós
+- A jóváhagyási revízióhash a címzettet, tárgyat, mindkét levéltörzset,
+  sablonazonosítót és paramétereket együtt rögzíti. A küldési kulcsból képzett
+  Brevo `Idempotency-Key` és a tartós
   `JÓVÁHAGYVA` feldolgozási jelző védi a sort a megszakadt vagy ismételt
   küldéstől.
+- A `BREVO FOGADTA` csak API-átvételt jelent. A `KÉZBESÍTVE` állapotot külön,
+  titkos fejléccel védett Brevo webhook írja. A hard bounce, blokkolt,
+  érvénytelen vagy letiltott cím a későbbi automatikus küldést is megállítja.
 - A Brevo kulcs kizárólag Worker secret lehet. A beszélgetésben vagy más
   nyilvános helyen megjelent kulcsot vissza kell vonni, és új kulcsot kell
   létrehozni.
@@ -163,11 +175,64 @@ Az Apps Script első használatakor a `Budai Tánc → E-mail token beállítás
 menüben az `EMAIL_ADMIN_TOKEN` értékét kell megadni. A `BREVO_API_KEY` nem
 kerül az Apps Scriptbe.
 
+## Brevo-sablonok és webhook
+
+A repository hat verziózott, mobilbarát tranzakciós sablon forrását tartja.
+Az alábbi parancsok alapból csak olvasnak vagy tervet írnak ki; egyik sem küld
+e-mailt.
+
+```bash
+# Ellenőrzött feladók, tranzakciós sablonok és webhookok listázása
+read -s 'BREVO_API_KEY?Brevo API-kulcs: '; export BREVO_API_KEY; echo
+npm run brevo:inspect
+
+# Egy meglévő kiinduló sablon teljes metaadatának és HTML-jének kiolvasása
+npm run brevo:inspect -- --template-id=123
+
+# A 6 tervezett módosítás helyi előnézete (Brevo-írás nélkül)
+npm run brevo:templates
+```
+
+Az első tényleges szinkron szándékosan inaktív sablonokat hoz létre vagy
+frissít. Meglévő sablont csak explicit `BREVO_TEMPLATE_IDS_JSON` leképezés,
+vagy a saját `budai-tancklub:<SABLONKULCS>` tag alapján módosít.
+
+```bash
+export BREVO_SENDER_EMAIL='a-brevoban-ellenorzott-felado@example.com'
+export BREVO_SENDER_NAME='Budai Táncklub'
+export BREVO_REPLY_TO_EMAIL='a-jovahagyott-valaszcim@example.com'
+npm run brevo:templates -- --execute
+```
+
+A parancs visszaírható `TEMPLATE_*` értékeket ad az `E-mail beállítások`
+laphoz. A hat sablon aktiválása csak külön, vizuális/tartalmi ellenőrzés után:
+
+```bash
+npm run brevo:templates -- --execute --activate
+```
+
+A webhook-szinkron szintén dry-run alapú. A Workerben és a Brevo által küldött
+egyedi fejlécben ugyanaz a hosszú, véletlen `BREVO_WEBHOOK_SECRET` szerepeljen.
+
+```bash
+export BREVO_WEBHOOK_URL='https://...workers.dev/webhooks/brevo'
+read -s 'BREVO_WEBHOOK_SECRET?Webhook titok: '; export BREVO_WEBHOOK_SECRET; echo
+npm run brevo:webhook
+
+# Csak a terv ellenőrzése után:
+npm run brevo:webhook -- --execute
+```
+
+A kulcsokat ne add meg parancssori argumentumként és ne írd fájlba. A fenti
+helykitöltők dokumentációs példák; az éles Worker-értékekhez a `wrangler
+secret put` interaktív parancsot használd.
+
 ## Tesztelés
 
 ```bash
 npm run check
 npm run test:fee
+npm run test:email
 npm run test:smoke
 npm run generate:payment-fixture
 ```
@@ -175,7 +240,8 @@ npm run generate:payment-fixture
 A `test-fixtures/dami-registration.csv` egy teljes, személyes adatot nem
 tartalmazó dummy export. A smoke teszt ellenőrzi az új rekord beszúrását, az
 azonos rekord frissítését, a J:N mezők megőrzését, a hibás fejléc elutasítását,
-a próbaóradátum mappelését és az idempotens Brevo-kérést. Production smoke teszt esetén a
+a próbaóradátum mappelését, a 10 e-mail-forgatókönyvet, a revízióhoz kötött
+jóváhagyást, az idempotens Brevo-kérést és a kézbesítési webhookot. Production smoke teszt esetén a
 `TEST-CODEX-20260723-001` és `TEST-WEBHOOK-001` azonosítókat a végén célzottan
 ellenőrizni és törölni kell.
 

@@ -131,34 +131,34 @@ A tesztcím csak a kontrollált tesztkörnyezetben írhatja felül a regisztrác
 
 ### 1. Szöveg és adatkontraktus
 
-- [ ] A kapott instrukcióból elkészíteni a 6 végleges magyar levélváltozatot.
-- [ ] Egységesíteni a tegezés/magázás, egyes/többes szám és felnőtt/gyerek megfogalmazást.
-- [ ] Javítani a regisztrációs link hibás Markdown/HTML alakját.
-- [ ] Rögzíteni a mezőneveket, kötelezőséget és kézi elbírálási szabályokat.
+- [x] A kapott instrukcióból elkészíteni a 6 végleges magyar levélváltozatot.
+- [x] Egységesíteni a tegezés/magázás, egyes/többes szám és felnőtt/gyerek megfogalmazást.
+- [x] Javítani a regisztrációs link hibás Markdown/HTML alakját.
+- [x] Rögzíteni a mezőneveket, kötelezőséget és kézi elbírálási szabályokat.
 - [ ] Zsolt jóváhagyja a 6 végleges szöveget és a feladói adatokat.
 
 ### 2. Google Sheet és Worker-logika
 
-- [ ] Létrehozni az `E-mail beállítások` fület és a helyszín/aláírás/pénzügyi konfigurációt.
-- [ ] Hozzáadni a rejtett, felülírható keresztnév-segédoszlopokat.
-- [ ] Bevezetni az `ADULT_SELF`, `PARENT_FOR_CHILD` és bizonytalan esetek besorolását.
-- [ ] A helyszínt kód alapján, nem szabad szöveges részegyezéssel kiválasztani.
-- [ ] Az e-mail-kulcsot eseménytípussal bővíteni, hogy ugyanahhoz a jelentkezéshez a beiratkozási és befizetési levél is idempotensen létezhessen.
-- [ ] A banki import után csak az újonnan, egyértelműen könyvelt tételekhez készíteni befizetés-visszaigazoló piszkozatot.
-- [ ] A Brevo API-kérést `templateId` + `params` formára átállítani.
-- [ ] Megtartani a jóváhagyási checkboxot, a forráshasht és az idempotenciakulcsot.
-- [ ] A Brevo-átvételt és a kézbesítést külön állapotként kezelni.
+- [x] Létrehozni az `E-mail beállítások` fület és a helyszín/aláírás/pénzügyi konfigurációt.
+- [x] Hozzáadni a rejtett, felülírható keresztnév-segédoszlopokat.
+- [x] Bevezetni az `ADULT_SELF`, `PARENT_FOR_CHILD` és bizonytalan esetek besorolását.
+- [x] A helyszínt kód alapján, nem szabad szöveges részegyezéssel kiválasztani.
+- [x] Az e-mail-kulcsot eseménytípussal bővíteni, hogy ugyanahhoz a jelentkezéshez a beiratkozási és befizetési levél is idempotensen létezhessen.
+- [x] A banki import után csak az újonnan, egyértelműen könyvelt tételekhez készíteni befizetés-visszaigazoló piszkozatot.
+- [x] A Brevo API-kérést `templateId` + `params` formára átállítani.
+- [x] Megtartani a jóváhagyási checkboxot, a forráshasht és az idempotenciakulcsot.
+- [x] A Brevo-átvételt és a kézbesítést külön állapotként kezelni.
 
 ### 3. Forráskezelés és Brevo-sablonok
 
-- [ ] A 6 sablon HTML-forrását a repositoryban, verziózva tárolni.
-- [ ] Egyszerű, mobilbarát, akadálymentes, képek nélkül is teljes leveleket készíteni.
+- [x] A 6 sablon HTML-forrását a repositoryban, verziózva tárolni.
+- [x] Egyszerű, mobilbarát, akadálymentes, képek nélkül is teljes leveleket készíteni.
 - [x] A Brevo Brand Libraryban a logó és az elsődleges brandszín be van állítva.
 - [x] A Brevóban létrejött egy egyszerű kiinduló sablon.
 - [ ] API-val azonosítani, hogy a meglévő sablon tranzakciós SMTP-sablonként elérhető-e, és kiolvasni az azonosítóját, editor-típusát és HTML-jét.
 - [ ] Ha a meglévő sablon megfelelő, azt használni vizuális alapként a 6 tranzakciós változathoz, a logó és brandszín megtartásával.
 - [ ] Ha nem használható tranzakciós alapként, egyszerű, szöveges levélhez hasonló tranzakciós sablont építeni; kis logó, visszafogott brandszínű linkek, egységes aláírás.
-- [ ] Készíteni egy idempotens sablonszinkron parancsot, amely API-val létrehozza vagy frissíti a 6 Brevo tranzakciós sablont, majd visszaolvassa őket.
+- [x] Készíteni egy idempotens sablonszinkron parancsot, amely API-val létrehozza vagy frissíti a 6 Brevo tranzakciós sablont, majd visszaolvassa őket.
 - [ ] A sablonokat először inaktívan létrehozni, renderelt előnézettel ellenőrizni, majd külön lépésben aktiválni.
 - [ ] A Brevo-sablonazonosítókat visszaírni az `E-mail beállítások` fülre vagy a telepítési konfigurációba.
 
@@ -186,25 +186,25 @@ Későbbi, külön migrációs munkacsomag:
 - [ ] A 6 tranzakciós sablon létrehozása, frissítése, aktiválása, visszaolvasása és paraméteres előnézete.
 - [ ] Jóváhagyott tesztlevelek kiküldése.
 - [ ] Tranzakciós webhook létrehozása a kézbesítési eseményekhez.
-- [ ] Cloudflare Worker-kód, tesztek, konfiguráció és dokumentáció elkészítése.
+- [x] Cloudflare Worker-kód, tesztek, konfiguráció és dokumentáció elkészítése.
 - [ ] A későbbi Kult2-migrációban a Brevo domainhitelesítési rekordjainak kiolvasása és a beállítás utáni státusz ellenőrzése.
 
 Postafiókot vagy DNS-rekordot csak akkor tudok közvetlenül létrehozni/módosítani, ha az adott szolgáltatóhoz külön, engedélyezett hozzáférés van. Enélkül ez Zsolt vagy a `kult2.hu` rendszergazdájának feladata.
 
 ### 6. Kézbesítési webhook és hibakezelés
 
-- [ ] Védett Worker webhook endpoint készítése Brevo eseményekhez.
-- [ ] A `request/accepted`, `delivered`, `soft_bounce`, `hard_bounce`, `blocked`, `invalid` állapotok deduplikált rögzítése.
-- [ ] Ismeretlen vagy bizonytalan eredményt `KÉZI ELLENŐRZÉS` állapotba tenni; automatikus újraküldés nem lehet.
-- [ ] A Brevo által elfogadott, de webhookkal még nem igazolt levél ne jelenjen meg kézbesítettként.
-- [ ] Hard bounce, blokkolás vagy érvénytelen cím esetén a további automatikus küldéseket megállítani az adott címre.
+- [x] Védett Worker webhook endpoint készítése Brevo eseményekhez.
+- [x] A `request/accepted`, `delivered`, `soft_bounce`, `hard_bounce`, `blocked`, `invalid` állapotok deduplikált rögzítése.
+- [x] Ismeretlen vagy bizonytalan eredményt `KÉZI ELLENŐRZÉS` állapotba tenni; automatikus újraküldés nem lehet.
+- [x] A Brevo által elfogadott, de webhookkal még nem igazolt levél ne jelenjen meg kézbesítettként.
+- [x] Hard bounce, blokkolás vagy érvénytelen cím esetén a további automatikus küldéseket megállítani az adott címre.
 
 ### 7. Tesztelés és élesítés
 
-- [ ] Unit teszt a 2 címzettípus × 2 helyszín × 2 jelentkezési esemény mind a 8 kombinációjára.
-- [ ] Unit teszt a befizetés-visszaigazolás mindkét címzettípusára.
-- [ ] Teszt hiányzó születési dátumra, gondviselőre, e-mailre, keresztnévre, helyszínkódra és sablonazonosítóra.
-- [ ] Teszt arra, hogy egy befizetés csak egyszer hoz létre levelet.
+- [x] Unit teszt a 2 címzettípus × 2 helyszín × 2 jelentkezési esemény mind a 8 kombinációjára.
+- [x] Unit teszt a befizetés-visszaigazolás mindkét címzettípusára.
+- [x] Teszt hiányzó születési dátumra, gondviselőre, e-mailre, keresztnévre, helyszínkódra és sablonazonosítóra.
+- [x] Teszt arra, hogy egy befizetés csak egyszer hoz létre levelet.
 - [ ] Brevo renderelt preview ellenőrzése mind a 6 sablonhoz dummy adatokkal.
 - [ ] Külön tesztjóváhagyás után a 10 kontrollált tesztlevél kiküldése a rögzített plus-address címekre.
 - [ ] Mobil, Gmail és Outlook megjelenés; linkek; Reply-To; ékezetek; pénz- és dátumformátum ellenőrzése.

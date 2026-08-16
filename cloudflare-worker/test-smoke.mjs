@@ -3,6 +3,9 @@ import fs from "node:fs/promises";
 import * as XLSX from "xlsx";
 import worker, {
   CSV_HEADERS,
+  EMAIL_EVENT_LOG_HEADERS,
+  EMAIL_OUTPUT_HEADERS,
+  emailRevisionHashFromRow,
   extractReferences,
   nameSuggestions,
   parseCsv,
@@ -10,6 +13,7 @@ import worker, {
   partitionManualImportRegistrations,
   paymentFromRow,
 } from "./src/worker.js";
+import { brevoTemplateDefinitions, emailSettingsSheetRows } from "./src/email-templates.js";
 
 const fixture = await fs.readFile(
   new URL("./test-fixtures/dami-registration.csv", import.meta.url),
@@ -39,6 +43,7 @@ const env = {
   EMAIL_ADMIN_TOKEN: "test-email-token",
   BREVO_API_KEY: "test-brevo-key",
   BREVO_SENDER_EMAIL: "sender@example.invalid",
+  BREVO_WEBHOOK_SECRET: "test-brevo-webhook-secret",
 };
 
 const sheetState = [
@@ -56,10 +61,22 @@ const automationConfigState = [[
   "TESZT TÁNC", "TESZT TÁNC/PÉNTEK HAJÓS TEREM/17.00-18.00/TESZT TANÁR", "PÉNTEK", "17:00", "18:00", "Hajós terem", "Teszt Tanár", 1, 60, "1x60", false,
   "", 1, "2026-09-03", "2026-09-30", "1x60", 43000, 40850,
 ]];
-const emailOutputState = [["Küldési kulcs", "Bejegyzésazonosító", "Félév / típus", "Sablonverzió", "Címzett", "Tárgy", "Szöveges levél", "HTML levél", "Első óra", "Összeg", "Számítás / indok", "Jóváhagyva", "Státusz", "Brevo messageId", "Hiba", "Forrás hash", "Frissítve", "Elküldve", "Manuálisan elküldve", "Manuális küldés időpontja", "Manuális küldés megjegyzése / küldője"]];
+const emailOutputState = [[...EMAIL_OUTPUT_HEADERS]];
+const emailEventLogState = [[...EMAIL_EVENT_LOG_HEADERS]];
+const emailSettingsState = emailSettingsSheetRows();
+let nextTemplateId = 101;
+for (const row of emailSettingsState) {
+  if (String(row[0] || "").startsWith("TEMPLATE_")) row[1] = nextTemplateId++;
+}
 
 const originalFetch = globalThis.fetch;
 const brevoRequests = [];
+const templateDefinitionsById = new Map();
+for (const row of emailSettingsState) {
+  if (!String(row[0] || "").startsWith("TEMPLATE_")) continue;
+  const key = String(row[0]).slice("TEMPLATE_".length);
+  templateDefinitionsById.set(Number(row[1]), brevoTemplateDefinitions().find((item) => item.key === key));
+}
 globalThis.fetch = async (input, options = {}) => {
   const url = String(input);
   const decodedUrl = decodeURIComponent(url);
@@ -69,6 +86,13 @@ globalThis.fetch = async (input, options = {}) => {
   if (url === "https://api.brevo.com/v3/smtp/email") {
     brevoRequests.push(JSON.parse(options.body));
     return new Response(JSON.stringify({ messageId: "test-brevo-message-id" }), { status: 201 });
+  }
+  if (url.startsWith("https://api.brevo.com/v3/smtp/templates/")) {
+    const id = Number(url.split("/").pop());
+    const definition = templateDefinitionsById.get(id);
+    return definition
+      ? new Response(JSON.stringify({ id, isActive: true, subject: definition.subject, htmlContent: definition.htmlContent }), { status: 200 })
+      : new Response(JSON.stringify({ code: "not_found" }), { status: 404 });
   }
   if (url.includes("/values:batchUpdate")) {
     const body = JSON.parse(options.body);
@@ -91,6 +115,10 @@ globalThis.fetch = async (input, options = {}) => {
       { properties: { sheetId: 1, title: " TAGOK I FÉLÉV" } },
       { properties: { sheetId: 2, title: "Befizetések napló" } },
       { properties: { sheetId: 3, title: "Függő befizetések" } },
+      { properties: { sheetId: 4, title: "Automata kalk" } },
+      { properties: { sheetId: 5, title: "E-mail kimenet" } },
+      { properties: { sheetId: 6, title: "E-mail beállítások" } },
+      { properties: { sheetId: 7, title: "E-mail eseménynapló" } },
     ] }), { status: 200 });
   }
   if (url.includes("www.googleapis.com/drive/v3/files/test-payment-file?alt=media")) {
@@ -221,34 +249,43 @@ try {
 
   sheetState.push(paymentMasterRow("9000001", "Kiss Beáta", "Kiss Júlia"));
   sheetState.push(paymentMasterRow("9000002", "Nagy Bence", "Nagy Béla"));
+  const paymentAutomationEnv = {
+    ...env,
+    PIPELINES_CONFIG_JSON: JSON.stringify({ pipelines: [{ ...pipeline, email_automation: true }] }),
+    PAYMENT_IMPORT_TOKEN: "test-payment-token",
+    PAYMENTS_SOURCE_CONFIG_JSON: JSON.stringify({ pipeline_id: pipeline.pipeline_id, drive_file_id: "test-payment-file", sheet_name: "Kivonat" }),
+  };
   const paymentImport = await worker.fetch(new Request("https://example.test/payments/test-payment-token", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ pipeline_id: pipeline.pipeline_id }),
-  }), { ...env, PAYMENT_IMPORT_TOKEN: "test-payment-token", PAYMENTS_SOURCE_CONFIG_JSON: JSON.stringify({ pipeline_id: pipeline.pipeline_id, drive_file_id: "test-payment-file", sheet_name: "Kivonat" }) });
+  }), paymentAutomationEnv);
   assert.equal(paymentImport.status, 200);
   assert.deepEqual(await paymentImport.json(), {
-    status: "ok", pipeline_id: pipeline.pipeline_id, new_transactions: 5, booked: 2, already_recorded: 0, pending: 3, duplicates: 0, manually_resolved: 0,
+    status: "ok", pipeline_id: pipeline.pipeline_id, new_transactions: 5, booked: 2, already_recorded: 0, pending: 3, duplicates: 0, manually_resolved: 0, payment_email_drafts: 2,
   });
   assert.equal(sheetState.find((row) => row[0] === "9000001")[10], "2026-08-10");
   assert.equal(paymentLogState.length, 6);
   assert.equal(paymentPendingState.length, 4);
   assert.match(paymentPendingState[1][7], /Kiss Beáta \(9000001\)/);
+  assert.equal(emailOutputState.filter((row) => row[21] === "PAYMENT_RECEIVED").length, 2);
 
   paymentPendingState[1][8] = "9000002";
   const manualResolution = await worker.fetch(new Request("https://example.test/payments/test-payment-token", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ pipeline_id: pipeline.pipeline_id }),
-  }), { ...env, PAYMENT_IMPORT_TOKEN: "test-payment-token", PAYMENTS_SOURCE_CONFIG_JSON: JSON.stringify({ pipeline_id: pipeline.pipeline_id, drive_file_id: "test-payment-file", sheet_name: "Kivonat" }) });
+  }), paymentAutomationEnv);
   assert.equal(manualResolution.status, 200);
   assert.equal((await manualResolution.json()).manually_resolved, 1);
   assert.equal(paymentPendingState[1][9], "Könyvelve kézzel");
+  assert.equal(emailOutputState.filter((row) => row[21] === "PAYMENT_RECEIVED").length, 2);
 
-  const readyRow = Array.from({ length: 44 }, () => "");
+  const readyRow = Array.from({ length: 46 }, () => "");
   readyRow[0] = "TEST-EMAIL-001";
   readyRow[1] = "TESZT TÁNC/PÉNTEK HAJÓS TEREM/17.00-18.00/TESZT TANÁR";
   readyRow[5] = "Teszt Elek";
   readyRow[6] = "2026-09-15 12:00:00";
   readyRow[8] = "nem";
+  readyRow[14] = "2012-05-12";
   readyRow[17] = "recipient@example.invalid";
   readyRow[18] = "Minta Anna";
   sheetState.push(readyRow);
@@ -282,6 +319,7 @@ try {
   readyEmail[18] = false;
   readyEmail[13] = "";
   readyEmail[11] = true;
+  readyEmail[28] = await emailRevisionHashFromRow(readyEmail);
   const send = await worker.fetch(new Request("https://example.test/emails/send/test-email-token", {
     method: "POST", body: JSON.stringify({ pipeline_id: pipeline.pipeline_id }),
   }), env);
@@ -289,9 +327,21 @@ try {
   assert.equal((await send.json()).sent, 1);
   assert.equal(brevoRequests.length, 1);
   assert.match(brevoRequests[0].headers["Idempotency-Key"], /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
-  assert.equal(brevoRequests[0].headers["X-BudaiTanc-Send-Key"], readyEmail[0]);
-  assert.equal(readyEmail[12], "ELKÜLDVE");
+  assert.equal(brevoRequests[0].headers["X-Mailin-custom"], `send_key:${readyEmail[0]}`);
+  assert.equal(typeof brevoRequests[0].templateId, "number");
+  assert.equal(brevoRequests[0].params.student_full_name, "Teszt Elek");
+  assert.equal(readyEmail[12], "BREVO FOGADTA");
   assert.equal(readyEmail[13], "test-brevo-message-id");
+  const delivery = await worker.fetch(new Request("https://example.test/webhooks/brevo", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-BudaiTanc-Brevo-Secret": "test-brevo-webhook-secret" },
+    body: JSON.stringify({ event: "delivered", email: readyEmail[4], "message-id": "test-brevo-message-id", ts_event: 1786879000 }),
+  }), env);
+  assert.equal(delivery.status, 200);
+  assert.equal((await delivery.json()).matched, true);
+  assert.equal(readyEmail[12], "KÉZBESÍTVE");
+  assert.equal(readyEmail[31], "KÉZBESÍTVE");
+  assert.equal(emailEventLogState.length, 2);
   const duplicateSend = await worker.fetch(new Request("https://example.test/emails/send/test-email-token", {
     method: "POST", body: JSON.stringify({ pipeline_id: pipeline.pipeline_id }),
   }), env);
@@ -324,15 +374,20 @@ function stateForRange(range, url = "") {
   const value = decodeURIComponent(range);
   if (value.includes("Automata kalk")) return automationConfigState;
   if (value.includes("E-mail kimenet")) return emailOutputState;
+  if (value.includes("E-mail beállítások")) return emailSettingsState;
+  if (value.includes("E-mail eseménynapló")) return emailEventLogState;
   if (value.includes("Befizetések napló")) return paymentLogState;
   if (value.includes("Függő befizetések")) return paymentPendingState;
   return url.includes("test-staff-spreadsheet") ? staffState : sheetState;
 }
 
 function paymentMasterRow(reference, studentName, parentName) {
-  const row = Array.from({ length: 27 }, () => "");
+  const row = Array.from({ length: 46 }, () => "");
   row[0] = reference;
   row[5] = studentName;
+  row[6] = "2026-08-01 10:00:00";
+  row[14] = "2012-05-12";
+  row[17] = `${reference}@example.invalid`;
   row[18] = parentName;
   return row;
 }

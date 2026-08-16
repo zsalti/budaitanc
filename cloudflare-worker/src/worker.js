@@ -1,6 +1,14 @@
 import * as XLSX from "xlsx";
 import { AUTOMATION_STATUS, calculateRegistration, formatDate, parseAutomationConfig } from "./fee-engine.js";
-import { TEMPLATE_VERSION, createEmailDraft } from "./email-templates.js";
+import {
+  EMAIL_EVENT,
+  TEMPLATE_VERSION,
+  brevoTemplateDefinitions,
+  buildEmailDraft,
+  defaultEmailSettings,
+  emailSettingsSheetRows,
+  parseEmailSettings,
+} from "./email-templates.js";
 
 const GOOGLE_SCOPES = [
   "https://www.googleapis.com/auth/spreadsheets",
@@ -13,13 +21,44 @@ const SYNC_PATH_PREFIX = "/sync/";
 const PAYMENTS_PATH_PREFIX = "/payments/";
 const EMAIL_DRAFTS_PATH_PREFIX = "/emails/drafts/";
 const EMAIL_SEND_PATH_PREFIX = "/emails/send/";
+const EMAIL_SETUP_PATH_PREFIX = "/emails/setup/";
+const BREVO_WEBHOOK_PATH = "/webhooks/brevo";
 const AUTOMATION_CONFIG_TAB = "Automata kalk";
 const EMAIL_OUTPUT_TAB = "E-mail kimenet";
+const EMAIL_SETTINGS_TAB = "E-mail beállítások";
+const EMAIL_EVENT_LOG_TAB = "E-mail eseménynapló";
 const TRIAL_DATE_COLUMN = "AH";
 const AUTOMATION_START_COLUMN = "AI";
 const AUTOMATION_END_COLUMN = "AR";
+const CONTACT_FIRST_NAME_COLUMN = "AS";
+const STUDENT_FIRST_NAME_COLUMN = "AT";
 const BREVO_SEND_URL = "https://api.brevo.com/v3/smtp/email";
+const BREVO_TEMPLATE_URL = "https://api.brevo.com/v3/smtp/templates";
 const inFlightSends = new Set();
+
+const EMAIL_COLUMN = Object.freeze({
+  SEND_KEY: 0, ENTRY_ID: 1, PERIOD: 2, TEMPLATE_VERSION: 3, TO: 4, SUBJECT: 5, PLAIN: 6, HTML: 7,
+  FIRST_CLASS: 8, AMOUNT: 9, EXPLANATION: 10, APPROVED: 11, STATUS: 12, MESSAGE_ID: 13,
+  ERROR: 14, SOURCE_HASH: 15, UPDATED_AT: 16, ACCEPTED_AT: 17, MANUAL_SENT: 18,
+  MANUAL_SENT_AT: 19, MANUAL_SENT_BY: 20, EVENT_TYPE: 21, AUDIENCE_TYPE: 22, VENUE_CODE: 23,
+  TEMPLATE_KEY: 24, TEMPLATE_ID: 25, PARAMS_JSON: 26, REVISION_HASH: 27, APPROVED_HASH: 28,
+  APPROVED_AT: 29, APPROVED_BY: 30, DELIVERY_STATUS: 31, DELIVERY_AT: 32, DELIVERY_ERROR: 33,
+});
+
+export const EMAIL_OUTPUT_HEADERS = [
+  "Küldési kulcs", "Bejegyzésazonosító", "Félév / típus", "Sablonverzió", "Címzett", "Tárgy",
+  "Szöveges levél", "HTML levél", "Első óra", "Összeg", "Számítás / indok", "Jóváhagyva",
+  "Státusz", "Brevo messageId", "Hiba", "Forrás hash", "Frissítve", "Brevo fogadta", "Manuálisan elküldve",
+  "Manuális küldés időpontja", "Manuális küldés megjegyzése / küldője", "Eseménytípus", "Címzett típusa",
+  "Helyszínkód", "Sablonkulcs", "Brevo templateId", "Paraméterek JSON", "Revízió hash",
+  "Jóváhagyott hash", "Jóváhagyás időpontja", "Jóváhagyó", "Kézbesítési állapot",
+  "Kézbesítési esemény ideje", "Kézbesítési hiba",
+];
+
+export const EMAIL_EVENT_LOG_HEADERS = [
+  "Eseményazonosító", "Brevo messageId", "Küldési kulcs", "Esemény", "Címzett", "Esemény ideje",
+  "Fogadás ideje", "Ok / részlet", "Nyers típus",
+];
 // Registration data ends at I. Imports preserve J:N in the master Sheet:
 // J is calculated by the fee engine; K:N contain payment/admin fields.
 const MASTER_MANUAL_START = 8;
@@ -85,6 +124,15 @@ export default {
     const sendToken = getProtectedPathToken(url.pathname, EMAIL_SEND_PATH_PREFIX);
     if (sendToken !== null) {
       return handleApprovedEmailSend(request, env, sendToken);
+    }
+
+    const setupToken = getProtectedPathToken(url.pathname, EMAIL_SETUP_PATH_PREFIX);
+    if (setupToken !== null) {
+      return handleEmailSetup(request, env, setupToken);
+    }
+
+    if (url.pathname === BREVO_WEBHOOK_PATH) {
+      return handleBrevoWebhook(request, env);
     }
 
     if (url.pathname !== WEBHOOK_PATH) return json({ error: "not_found" }, 404);
@@ -210,6 +258,46 @@ async function handleApprovedEmailSend(request, env, token) {
   } catch (error) {
     console.error("Approved email send failed", error);
     return json({ error: "email_send_failed", message: error.message || "Ismeretlen hiba." }, 500);
+  }
+}
+
+async function handleEmailSetup(request, env, token) {
+  if (!env.EMAIL_ADMIN_TOKEN || !safeEqual(token, env.EMAIL_ADMIN_TOKEN)) {
+    return json({ error: "not_found" }, 404);
+  }
+  if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
+  try {
+    const payload = await optionalJson(request);
+    const pipeline = getPipeline(env, text(payload.pipeline_id) || defaultPipelineId(env));
+    const accessToken = await getGoogleAccessToken(env.GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT);
+    const result = await ensureEmailInfrastructure(accessToken, pipeline);
+    return json({ status: "ok", pipeline_id: pipeline.pipeline_id, ...result });
+  } catch (error) {
+    console.error("Email infrastructure setup failed", error);
+    return json({ error: "email_setup_failed", message: error.message || "Ismeretlen hiba." }, 500);
+  }
+}
+
+async function handleBrevoWebhook(request, env) {
+  if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
+  if (!env.BREVO_WEBHOOK_SECRET
+      || !safeEqual(request.headers.get("X-BudaiTanc-Brevo-Secret") || "", env.BREVO_WEBHOOK_SECRET)) {
+    return json({ error: "unauthorized" }, 401);
+  }
+  let payload;
+  try { payload = await request.json(); }
+  catch { return json({ error: "invalid_json" }, 400); }
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return json({ error: "invalid_payload" }, 400);
+
+  try {
+    const pipelineId = text(env.BREVO_PIPELINE_ID) || defaultPipelineId(env);
+    const pipeline = getPipeline(env, pipelineId);
+    const accessToken = await getGoogleAccessToken(env.GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT);
+    const result = await recordBrevoEvent(accessToken, pipeline, payload);
+    return json({ status: "ok", ...result });
+  } catch (error) {
+    console.error("Brevo webhook processing failed", error);
+    return json({ error: "brevo_webhook_failed", message: error.message || "Ismeretlen hiba." }, 500);
   }
 }
 
@@ -352,6 +440,7 @@ async function importPayments(accessToken, pipeline, transactions) {
   const logWrites = [];
   const pendingWrites = [];
   const summary = { new_transactions: 0, booked: 0, already_recorded: 0, pending: 0, duplicates: 0, manually_resolved: 0 };
+  const bookedReferences = new Set();
 
   for (const pending of pendingBySource.values()) {
     const manualReference = text(pending.row[8]);
@@ -361,7 +450,10 @@ async function importPayments(accessToken, pipeline, transactions) {
     pendingWrites.push({ range: `${quoteSheetName(paymentSheets.pending)}!J${pending.rowIndex}:K${pending.rowIndex}`, values: [["Könyvelve kézzel", new Date().toISOString()]] });
     updateLogStatusWrite(logRows, paymentSheets.log, text(pending.row[0]), "Könyvelve kézzel", manualReference, logWrites);
     summary.manually_resolved += 1;
-    if (status === "booked") summary.booked += 1; else summary.already_recorded += 1;
+    if (status === "booked") {
+      summary.booked += 1;
+      bookedReferences.add(registration.reference);
+    } else summary.already_recorded += 1;
   }
 
   let logRowIndex = logRows.length + 1;
@@ -377,7 +469,10 @@ async function importPayments(accessToken, pipeline, transactions) {
       matchedReference = matches[0].reference;
       const result = bookPaymentIfNeeded(matches[0], payment.bookingDate, masterWrites);
       status = result === "booked" ? "Könyvelve" : "Már rögzített";
-      if (result === "booked") summary.booked += 1; else summary.already_recorded += 1;
+      if (result === "booked") {
+        summary.booked += 1;
+        bookedReferences.add(matches[0].reference);
+      } else summary.already_recorded += 1;
     } else {
       status = matches.length > 1 ? "Többértelmű" : "Függő";
       const suggestions = nameSuggestions(payment.senderName, registrations);
@@ -398,6 +493,12 @@ async function importPayments(accessToken, pipeline, transactions) {
   if (masterWrites.length) await writeSheetRanges(accessToken, pipeline.spreadsheet_id, masterWrites);
   if (logWrites.length) await writeSheetRanges(accessToken, pipeline.spreadsheet_id, logWrites);
   if (pendingWrites.length) await writeSheetRanges(accessToken, pipeline.spreadsheet_id, pendingWrites);
+  if (bookedReferences.size && pipeline.email_automation !== false) {
+    const drafts = await refreshPaymentEmailDrafts(accessToken, pipeline, bookedReferences);
+    summary.payment_email_drafts = drafts.processed;
+  } else {
+    summary.payment_email_drafts = 0;
+  }
   return summary;
 }
 
@@ -756,10 +857,51 @@ async function syncStaffTarget(accessToken, pipeline) {
   return { created, updated, deleted: deleteRows.length, total: registrations.length };
 }
 
+async function ensureEmailInfrastructure(accessToken, pipeline) {
+  const metadata = await getSpreadsheetMetadata(accessToken, pipeline.spreadsheet_id);
+  const titles = new Set((metadata.sheets || []).map((sheet) => sheet.properties?.title));
+  const requiredTabs = [EMAIL_OUTPUT_TAB, EMAIL_SETTINGS_TAB, EMAIL_EVENT_LOG_TAB];
+  const missing = requiredTabs.filter((title) => !titles.has(title));
+  if (missing.length) {
+    const baseUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(pipeline.spreadsheet_id)}`;
+    await googleFetch(`${baseUrl}:batchUpdate`, accessToken, {
+      method: "POST",
+      body: JSON.stringify({ requests: missing.map((title) => ({ addSheet: { properties: { title, gridProperties: { frozenRowCount: 1 } } } })) }),
+    });
+  }
+
+  const writes = [
+    { range: `${quoteSheetName(EMAIL_OUTPUT_TAB)}!A1:AH1`, values: [EMAIL_OUTPUT_HEADERS] },
+    { range: `${quoteSheetName(EMAIL_EVENT_LOG_TAB)}!A1:I1`, values: [EMAIL_EVENT_LOG_HEADERS] },
+    { range: `${quoteSheetName(pipeline.tab_name)}!${CONTACT_FIRST_NAME_COLUMN}1:${STUDENT_FIRST_NAME_COLUMN}1`, values: [["E-mail kapcsolattartó keresztnév", "E-mail növendék keresztnév"]] },
+  ];
+  const settingsRows = missing.includes(EMAIL_SETTINGS_TAB)
+    ? []
+    : await readSheetRows(accessToken, pipeline.spreadsheet_id, EMAIL_SETTINGS_TAB, "A:H");
+  if (!settingsRows.length || text(settingsRows[0]?.[0]) !== "Kulcs") {
+    const defaults = emailSettingsSheetRows();
+    writes.push({ range: `${quoteSheetName(EMAIL_SETTINGS_TAB)}!A1:H${defaults.length}`, values: defaults });
+  }
+  await writeSheetRanges(accessToken, pipeline.spreadsheet_id, writes);
+  return { created_tabs: missing, output_columns: EMAIL_OUTPUT_HEADERS.length, settings_initialized: !settingsRows.length };
+}
+
+async function loadEmailSettings(accessToken, pipeline) {
+  const metadata = await getSpreadsheetMetadata(accessToken, pipeline.spreadsheet_id);
+  const exists = (metadata.sheets || []).some((sheet) => sheet.properties?.title === EMAIL_SETTINGS_TAB);
+  if (!exists) return { settings: defaultEmailSettings(), configured: false };
+  const rows = await readSheetRows(accessToken, pipeline.spreadsheet_id, EMAIL_SETTINGS_TAB, "A:H");
+  if (text(rows[0]?.[0]) !== "Kulcs") return { settings: defaultEmailSettings(), configured: false };
+  return { settings: parseEmailSettings(rows), configured: true };
+}
+
 async function refreshEmailDrafts(accessToken, pipeline, entryIds = null) {
-  const masterRows = await readSheetRows(accessToken, pipeline.spreadsheet_id, pipeline.tab_name, "A:AR");
-  const configRows = await readSheetRows(accessToken, pipeline.spreadsheet_id, AUTOMATION_CONFIG_TAB, "A:Y");
-  const emailRows = await readSheetRows(accessToken, pipeline.spreadsheet_id, EMAIL_OUTPUT_TAB, "A:U");
+  const [masterRows, configRows, emailRows, emailSettings] = await Promise.all([
+    readSheetRows(accessToken, pipeline.spreadsheet_id, pipeline.tab_name, "A:AT"),
+    readSheetRows(accessToken, pipeline.spreadsheet_id, AUTOMATION_CONFIG_TAB, "A:Y"),
+    readSheetRows(accessToken, pipeline.spreadsheet_id, EMAIL_OUTPUT_TAB, "A:AH"),
+    loadEmailSettings(accessToken, pipeline),
+  ]);
   if (text(masterRows[0]?.[0]) !== "Közlemény") throw new Error("A fő Sheet első oszlopa nem Közlemény.");
   if (text(configRows[0]?.[0]) !== "Tanfolyam kulcs") throw new Error("Az Automata kalk órarend-fejléce hiányzik.");
   if (text(emailRows[0]?.[0]) !== "Küldési kulcs") throw new Error("Az E-mail kimenet fejléce hiányzik.");
@@ -776,12 +918,27 @@ async function refreshEmailDrafts(accessToken, pipeline, entryIds = null) {
     if (!entryId || !text(row[5]) || (entryIds && !entryIds.has(entryId))) continue;
     const registration = registrationFromMasterRow(row);
     const calculation = calculateRegistration(registration, config);
-    const sourceHash = await sha256(JSON.stringify({ registration, calculation: serializableCalculation(calculation), templateVersion: TEMPLATE_VERSION }));
     const mainRow = index + 1;
     const firstClassValue = calculation.firstClass ? `${formatDate(calculation.firstClass.date)} ${calculation.firstClass.startTime}` : "";
+    const eventType = calculation.isTrial ? EMAIL_EVENT.TRIAL : EMAIL_EVENT.ENROLLMENT;
+    const draft = calculation.status === AUTOMATION_STATUS.READY
+      ? buildEmailDraft(registration, calculation, emailSettings.settings, eventType)
+      : emptyEmailDraft(eventType);
+    const sourceHash = await sha256(JSON.stringify({
+      registration,
+      calculation: serializableCalculation(calculation),
+      eventType,
+      templateVersion: TEMPLATE_VERSION,
+      templateKey: draft.templateKey,
+      templateId: draft.templateId,
+      params: draft.params,
+      settingsConfigured: emailSettings.configured,
+    }));
     const automationValues = [
       firstClassValue, calculation.semester || "", calculation.feeBand || "", calculation.feeCategory || "",
-      calculation.discount || "", calculation.status, calculation.manualReason || "", sourceHash, TEMPLATE_VERSION, now,
+      calculation.discount || "", calculation.status,
+      [calculation.manualReason, draft.manualReason, draft.configurationWarning].filter(Boolean).join(" "),
+      sourceHash, TEMPLATE_VERSION, now,
     ];
     if (calculation.status === AUTOMATION_STATUS.READY && calculation.isTrial && !text(registration.trialDate)) {
       writes.push({ range: `${quoteSheetName(pipeline.tab_name)}!${TRIAL_DATE_COLUMN}${mainRow}`, values: [[formatDate(calculation.firstClass.date)]] });
@@ -791,30 +948,52 @@ async function refreshEmailDrafts(accessToken, pipeline, entryIds = null) {
       const feeColumn = calculation.semester === 2 ? "AC" : "J";
       writes.push({ range: `${quoteSheetName(pipeline.tab_name)}!${feeColumn}${mainRow}`, values: [[calculation.fee]] });
     }
+    if (!text(registration.contactFirstName) && draft.contactFirstName) {
+      writes.push({ range: `${quoteSheetName(pipeline.tab_name)}!${CONTACT_FIRST_NAME_COLUMN}${mainRow}`, values: [[draft.contactFirstName]] });
+    }
+    if (!text(registration.studentFirstName) && draft.studentFirstName) {
+      writes.push({ range: `${quoteSheetName(pipeline.tab_name)}!${STUDENT_FIRST_NAME_COLUMN}${mainRow}`, values: [[draft.studentFirstName]] });
+    }
 
     const periodKey = emailPeriodKey(registration, calculation);
-    const sendKey = `${entryId}|${periodKey}|${TEMPLATE_VERSION}`;
+    const sendKey = `${entryId}|${eventType}|${periodKey}|${TEMPLATE_VERSION}`;
     const existingIndex = mutableEmailRows.findIndex((emailRow, emailIndex) => emailIndex > 0 && text(emailRow[0]) === sendKey);
     const existing = existingIndex >= 0 ? mutableEmailRows[existingIndex] : [];
     if (text(existing[15]) !== sourceHash) {
-      const draft = calculation.status === AUTOMATION_STATUS.READY ? createEmailDraft(registration, calculation) : { subject: "", plain: "", html: "" };
       const manualSent = isChecked(existing[18]);
-      const queueStatus = text(existing[12]) === AUTOMATION_STATUS.SENT || manualSent
+      const baseStatus = calculation.status === AUTOMATION_STATUS.READY
+        && !draft.manualReason && draft.templateId
+        ? AUTOMATION_STATUS.READY
+        : AUTOMATION_STATUS.MANUAL;
+      const queueStatus = isFinalEmailStatus(text(existing[12])) || manualSent
         ? AUTOMATION_STATUS.CHANGED_AFTER_SEND
-        : calculation.status;
+        : baseStatus;
+      const explanation = [
+        calculation.explanation || calculation.manualReason,
+        draft.manualReason,
+        draft.configurationWarning,
+        emailSettings.configured ? "" : "Az E-mail beállítások fül még nincs inicializálva; kódalapú alapértékek láthatók.",
+      ].filter(Boolean).join(" ");
       const queueRow = [
         sendKey, entryId, periodKey, TEMPLATE_VERSION, registration.email, draft.subject, draft.plain, draft.html,
-        firstClassValue, calculation.fee || "", calculation.explanation || calculation.manualReason || "", false,
+        firstClassValue, calculation.fee || "", explanation, false,
         queueStatus, text(existing[13]), "", sourceHash, now, text(existing[17]),
         manualSent, text(existing[19]), text(existing[20]),
+        eventType, draft.audienceType, draft.venueCode, draft.templateKey, draft.templateId,
+        draft.params ? JSON.stringify(draft.params) : "", "", "", "", "", "", "", "",
       ];
+      queueRow[EMAIL_COLUMN.REVISION_HASH] = await emailRevisionHashFromRow(queueRow);
       const queueRowIndex = existingIndex >= 0 ? existingIndex + 1 : firstEmptyRow(mutableEmailRows, 1);
       while (mutableEmailRows.length < queueRowIndex) mutableEmailRows.push([]);
       mutableEmailRows[queueRowIndex - 1] = queueRow;
-      writes.push({ range: `${quoteSheetName(EMAIL_OUTPUT_TAB)}!A${queueRowIndex}:U${queueRowIndex}`, values: [queueRow] });
+      writes.push({ range: `${quoteSheetName(EMAIL_OUTPUT_TAB)}!A${queueRowIndex}:AH${queueRowIndex}`, values: [queueRow] });
     }
 
-    results.push({ entry_id: entryId, row_index: mainRow, status: calculation.status, reason: calculation.manualReason || "", fee: calculation.fee || "", first_class: firstClassValue });
+    const finalReason = [calculation.manualReason, draft.manualReason, draft.configurationWarning].filter(Boolean).join(" ");
+    const resultStatus = calculation.status === AUTOMATION_STATUS.READY && !finalReason
+      ? AUTOMATION_STATUS.READY
+      : AUTOMATION_STATUS.MANUAL;
+    results.push({ entry_id: entryId, row_index: mainRow, event_type: eventType, status: resultStatus, reason: finalReason, fee: calculation.fee || "", first_class: firstClassValue });
   }
 
   if (writes.length) await writeSheetRanges(accessToken, pipeline.spreadsheet_id, writes);
@@ -824,6 +1003,88 @@ async function refreshEmailDrafts(accessToken, pipeline, entryIds = null) {
     manual: results.filter((item) => item.status === AUTOMATION_STATUS.MANUAL).length,
     results,
   };
+}
+
+function emptyEmailDraft(eventType) {
+  return {
+    subject: "", plain: "", html: "", eventType, audienceType: "", venueCode: "", templateKey: "",
+    templateId: "", params: null, contactFirstName: "", studentFirstName: "", manualReason: "", configurationWarning: "",
+  };
+}
+
+async function refreshPaymentEmailDrafts(accessToken, pipeline, entryIds) {
+  const [masterRows, emailRows, emailSettings] = await Promise.all([
+    readSheetRows(accessToken, pipeline.spreadsheet_id, pipeline.tab_name, "A:AT"),
+    readSheetRows(accessToken, pipeline.spreadsheet_id, EMAIL_OUTPUT_TAB, "A:AH"),
+    loadEmailSettings(accessToken, pipeline),
+  ]);
+  if (text(masterRows[0]?.[0]) !== "Közlemény") throw new Error("A fő Sheet első oszlopa nem Közlemény.");
+  if (text(emailRows[0]?.[0]) !== "Küldési kulcs") throw new Error("Az E-mail kimenet fejléce hiányzik.");
+
+  const mutableEmailRows = emailRows.map((row) => [...row]);
+  const writes = [];
+  const results = [];
+  const now = new Date().toISOString();
+
+  for (let index = 1; index < masterRows.length; index += 1) {
+    const row = masterRows[index] || [];
+    const entryId = text(row[0]);
+    if (!entryId || !entryIds.has(entryId)) continue;
+    const registration = registrationFromMasterRow(row);
+    if (!registration.paidDate) continue;
+    const draft = buildEmailDraft(registration, {}, emailSettings.settings, EMAIL_EVENT.PAYMENT_RECEIVED);
+    const sourceHash = await sha256(JSON.stringify({
+      registration,
+      paidDate: registration.paidDate,
+      eventType: EMAIL_EVENT.PAYMENT_RECEIVED,
+      templateVersion: TEMPLATE_VERSION,
+      templateKey: draft.templateKey,
+      templateId: draft.templateId,
+      params: draft.params,
+      settingsConfigured: emailSettings.configured,
+    }));
+    const periodKey = "PAYMENT_RECEIVED|1";
+    const sendKey = `${entryId}|${periodKey}|${TEMPLATE_VERSION}`;
+    const existingIndex = mutableEmailRows.findIndex((emailRow, emailIndex) => emailIndex > 0 && text(emailRow[0]) === sendKey);
+    const existing = existingIndex >= 0 ? mutableEmailRows[existingIndex] : [];
+    if (text(existing[EMAIL_COLUMN.SOURCE_HASH]) === sourceHash) {
+      results.push({ entry_id: entryId, status: text(existing[EMAIL_COLUMN.STATUS]), reason: text(existing[EMAIL_COLUMN.EXPLANATION]) });
+      continue;
+    }
+
+    const manualSent = isChecked(existing[EMAIL_COLUMN.MANUAL_SENT]);
+    const baseStatus = !draft.manualReason && draft.templateId ? AUTOMATION_STATUS.READY : AUTOMATION_STATUS.MANUAL;
+    const queueStatus = isFinalEmailStatus(text(existing[EMAIL_COLUMN.STATUS])) || manualSent
+      ? AUTOMATION_STATUS.CHANGED_AFTER_SEND
+      : baseStatus;
+    const explanation = [
+      `Befizetés könyvelve: ${registration.paidDate}.`, draft.manualReason, draft.configurationWarning,
+      emailSettings.configured ? "" : "Az E-mail beállítások fül még nincs inicializálva; kódalapú alapértékek láthatók.",
+    ].filter(Boolean).join(" ");
+    const queueRow = [
+      sendKey, entryId, periodKey, TEMPLATE_VERSION, registration.email, draft.subject, draft.plain, draft.html,
+      "", text(row[9]), explanation, false, queueStatus, text(existing[EMAIL_COLUMN.MESSAGE_ID]), "", sourceHash,
+      now, text(existing[EMAIL_COLUMN.ACCEPTED_AT]), manualSent, text(existing[EMAIL_COLUMN.MANUAL_SENT_AT]),
+      text(existing[EMAIL_COLUMN.MANUAL_SENT_BY]), EMAIL_EVENT.PAYMENT_RECEIVED, draft.audienceType, "", draft.templateKey,
+      draft.templateId, JSON.stringify(draft.params || {}), "", "", "", "", "", "", "",
+    ];
+    queueRow[EMAIL_COLUMN.REVISION_HASH] = await emailRevisionHashFromRow(queueRow);
+    const queueRowIndex = existingIndex >= 0 ? existingIndex + 1 : firstEmptyRow(mutableEmailRows, 1);
+    while (mutableEmailRows.length < queueRowIndex) mutableEmailRows.push([]);
+    mutableEmailRows[queueRowIndex - 1] = queueRow;
+    writes.push({ range: `${quoteSheetName(EMAIL_OUTPUT_TAB)}!A${queueRowIndex}:AH${queueRowIndex}`, values: [queueRow] });
+    const mainRow = index + 1;
+    if (!registration.contactFirstName && draft.contactFirstName) {
+      writes.push({ range: `${quoteSheetName(pipeline.tab_name)}!${CONTACT_FIRST_NAME_COLUMN}${mainRow}`, values: [[draft.contactFirstName]] });
+    }
+    if (!registration.studentFirstName && draft.studentFirstName) {
+      writes.push({ range: `${quoteSheetName(pipeline.tab_name)}!${STUDENT_FIRST_NAME_COLUMN}${mainRow}`, values: [[draft.studentFirstName]] });
+    }
+    results.push({ entry_id: entryId, status: queueStatus, reason: explanation });
+  }
+
+  if (writes.length) await writeSheetRanges(accessToken, pipeline.spreadsheet_id, writes);
+  return { processed: results.length, results };
 }
 
 async function markAutomationErrors(accessToken, pipeline, results, message) {
@@ -839,9 +1100,11 @@ function registrationFromMasterRow(row) {
   return {
     entryId: text(row[0]), courseRaw: text(row[1]), studentName: text(row[5]), submittedAt: text(row[6]),
     startDate: text(row[7]), trialSignup: text(row[8]), alternateAttendance: text(row[13]), email: text(row[17]),
+    birthDate: text(row[14]),
     parentName: text(row[18]), districtCardNumber: text(row[19]), districtCardExpiry: text(row[20]),
     siblingName: text(row[22]), siblingGroup: text(row[23]), carryoverAmount: text(row[24]) || text(row[27]),
-    trialDate: text(row[33]),
+    trialDate: text(row[33]), paidDate: text(row[10]),
+    contactFirstName: text(row[44]), studentFirstName: text(row[45]),
   };
 }
 
@@ -862,65 +1125,297 @@ function firstEmptyRow(rows, keyColumn) {
   return Math.max(2, rows.length + 1);
 }
 
+async function emailRevisionHashFromRow(row) {
+  const fields = [
+    EMAIL_COLUMN.TO, EMAIL_COLUMN.SUBJECT, EMAIL_COLUMN.PLAIN, EMAIL_COLUMN.HTML,
+    EMAIL_COLUMN.TEMPLATE_VERSION, EMAIL_COLUMN.SOURCE_HASH, EMAIL_COLUMN.EVENT_TYPE,
+    EMAIL_COLUMN.AUDIENCE_TYPE, EMAIL_COLUMN.VENUE_CODE, EMAIL_COLUMN.TEMPLATE_KEY,
+    EMAIL_COLUMN.TEMPLATE_ID, EMAIL_COLUMN.PARAMS_JSON,
+  ].map((index) => text(row[index]));
+  return sha256(fields.join("\u001f"));
+}
+
+function isFinalEmailStatus(status) {
+  return [
+    AUTOMATION_STATUS.ACCEPTED, AUTOMATION_STATUS.DELIVERED, AUTOMATION_STATUS.SENT,
+    AUTOMATION_STATUS.SOFT_BOUNCE, AUTOMATION_STATUS.HARD_BOUNCE, AUTOMATION_STATUS.BLOCKED,
+    AUTOMATION_STATUS.INVALID, AUTOMATION_STATUS.SUPPRESSED,
+  ].includes(status);
+}
+
+async function recordBrevoEvent(accessToken, pipeline, payload) {
+  const [eventRows, emailRows] = await Promise.all([
+    readSheetRows(accessToken, pipeline.spreadsheet_id, EMAIL_EVENT_LOG_TAB, "A:I"),
+    readSheetRows(accessToken, pipeline.spreadsheet_id, EMAIL_OUTPUT_TAB, "A:AH"),
+  ]);
+  if (text(eventRows[0]?.[0]) !== "Eseményazonosító") throw new Error("Az E-mail eseménynapló fejléce hiányzik.");
+  if (text(emailRows[0]?.[0]) !== "Küldési kulcs") throw new Error("Az E-mail kimenet fejléce hiányzik.");
+
+  const rawEvent = normalizeBrevoEvent(payload.event || payload.type);
+  const messageId = text(payload["message-id"] || payload.messageId || payload.message_id);
+  const recipient = text(payload.email || payload.recipient);
+  const eventAt = brevoEventTimestamp(payload);
+  const sendKeyFromPayload = brevoSendKey(payload);
+  const eventId = await sha256(JSON.stringify({
+    brevoId: text(payload.id || payload.event_id), messageId, rawEvent, recipient, eventAt,
+  }));
+  if (eventRows.slice(1).some((row) => text(row[0]) === eventId)) {
+    return { duplicate: true, event: rawEvent, matched: false };
+  }
+
+  let emailIndex = -1;
+  if (sendKeyFromPayload) {
+    emailIndex = emailRows.findIndex((row, index) => index > 0 && text(row[EMAIL_COLUMN.SEND_KEY]) === sendKeyFromPayload);
+  }
+  if (emailIndex < 0 && messageId) {
+    emailIndex = emailRows.findIndex((row, index) => index > 0 && text(row[EMAIL_COLUMN.MESSAGE_ID]) === messageId);
+  }
+  const matchedRow = emailIndex >= 0 ? emailRows[emailIndex] : [];
+  const sendKey = text(matchedRow[EMAIL_COLUMN.SEND_KEY]) || sendKeyFromPayload;
+  const reason = text(payload.reason || payload.description || payload.response || payload.error);
+  const receivedAt = new Date().toISOString();
+  const eventRowIndex = firstEmptyRow(eventRows, 1);
+  const writes = [{
+    range: `${quoteSheetName(EMAIL_EVENT_LOG_TAB)}!A${eventRowIndex}:I${eventRowIndex}`,
+    values: [[eventId, messageId, sendKey, brevoEventLabel(rawEvent), recipient, eventAt, receivedAt, reason, rawEvent]],
+  }];
+
+  const mappedStatus = brevoStatus(rawEvent) || AUTOMATION_STATUS.NEEDS_REVIEW;
+  if (emailIndex >= 0 && mappedStatus) {
+    const currentStatus = text(matchedRow[EMAIL_COLUMN.STATUS]);
+    const nextStatus = brevoNextStatus(currentStatus, mappedStatus);
+    if (nextStatus !== currentStatus || reason) {
+      const rowIndex = emailIndex + 1;
+      const deliveryError = isBrevoFailureStatus(nextStatus) ? (reason || brevoEventLabel(rawEvent)) : "";
+      writes.push({
+        range: `${quoteSheetName(EMAIL_OUTPUT_TAB)}!M${rowIndex}:O${rowIndex}`,
+        values: [[nextStatus, messageId || text(matchedRow[EMAIL_COLUMN.MESSAGE_ID]), deliveryError]],
+      });
+      writes.push({
+        range: `${quoteSheetName(EMAIL_OUTPUT_TAB)}!AF${rowIndex}:AH${rowIndex}`,
+        values: [[nextStatus, eventAt || receivedAt, deliveryError]],
+      });
+    }
+  }
+
+  await writeSheetRanges(accessToken, pipeline.spreadsheet_id, writes);
+  return { duplicate: false, event: rawEvent, matched: emailIndex >= 0, send_key: sendKey, status: mappedStatus || "" };
+}
+
+function brevoSendKey(payload) {
+  const candidates = [
+    payload["X-Mailin-custom"], payload["x-mailin-custom"], payload.custom_header,
+    payload.headers?.["X-Mailin-custom"], payload.headers?.["x-mailin-custom"],
+  ];
+  for (const candidate of candidates) {
+    const match = text(candidate).match(/(?:^|[|;,\s])send_key:([^;,]+?)(?=$|[;,])/i);
+    if (match) return match[1].trim();
+    const simple = text(candidate).match(/^send_key:(.+)$/i);
+    if (simple) return simple[1].trim();
+  }
+  return "";
+}
+
+function brevoEventTimestamp(payload) {
+  const raw = payload.ts_event || payload.ts || payload.timestamp;
+  if (Number.isFinite(Number(raw)) && Number(raw) > 0) {
+    const milliseconds = Number(raw) > 10_000_000_000 ? Number(raw) : Number(raw) * 1000;
+    return new Date(milliseconds).toISOString();
+  }
+  const parsed = Date.parse(text(payload.date));
+  return Number.isNaN(parsed) ? "" : new Date(parsed).toISOString();
+}
+
+function brevoStatus(event) {
+  const statuses = {
+    request: AUTOMATION_STATUS.ACCEPTED,
+    delivered: AUTOMATION_STATUS.DELIVERED,
+    soft_bounce: AUTOMATION_STATUS.SOFT_BOUNCE,
+    hard_bounce: AUTOMATION_STATUS.HARD_BOUNCE,
+    blocked: AUTOMATION_STATUS.BLOCKED,
+    invalid: AUTOMATION_STATUS.INVALID,
+    spam: AUTOMATION_STATUS.SUPPRESSED,
+    unsubscribed: AUTOMATION_STATUS.SUPPRESSED,
+  };
+  return statuses[event] || "";
+}
+
+function normalizeBrevoEvent(value) {
+  return text(value).replace(/([a-z])([A-Z])/g, "$1_$2").replace(/[\s-]+/g, "_").toLowerCase();
+}
+
+function brevoEventLabel(event) {
+  return ({
+    request: "Brevo fogadta", delivered: "Kézbesítve", soft_bounce: "Puha visszapattanás",
+    hard_bounce: "Kemény visszapattanás", blocked: "Blokkolva", invalid: "Érvénytelen cím",
+    spam: "Spamként jelölve", unsubscribed: "Leiratkozás",
+  })[event] || event || "Ismeretlen Brevo-esemény";
+}
+
+function isBrevoFailureStatus(status) {
+  return [
+    AUTOMATION_STATUS.SOFT_BOUNCE, AUTOMATION_STATUS.HARD_BOUNCE, AUTOMATION_STATUS.BLOCKED,
+    AUTOMATION_STATUS.INVALID, AUTOMATION_STATUS.SUPPRESSED,
+  ].includes(status);
+}
+
+function brevoNextStatus(current, incoming) {
+  if (current === AUTOMATION_STATUS.DELIVERED) return current;
+  if (isBrevoFailureStatus(current)
+      && [AUTOMATION_STATUS.ACCEPTED, AUTOMATION_STATUS.NEEDS_REVIEW].includes(incoming)) return current;
+  return incoming;
+}
+
 async function sendApprovedEmails(accessToken, pipeline, env) {
   if (!env.BREVO_API_KEY || !env.BREVO_SENDER_EMAIL) throw new Error("Hiányzik a BREVO_API_KEY vagy a BREVO_SENDER_EMAIL Worker secret.");
   await refreshEmailDrafts(accessToken, pipeline, null);
-  const rows = await readSheetRows(accessToken, pipeline.spreadsheet_id, EMAIL_OUTPUT_TAB, "A:U");
+  const rows = await readSheetRows(accessToken, pipeline.spreadsheet_id, EMAIL_OUTPUT_TAB, "A:AH");
   if (text(rows[0]?.[0]) !== "Küldési kulcs") throw new Error("Az E-mail kimenet fejléce hiányzik.");
-  let sent = 0;
+  let accepted = 0;
   let skipped = 0;
   let failed = 0;
+  let needsReview = 0;
+  const verifiedTemplates = new Map();
+  const suppressedRecipients = new Set(rows.slice(1)
+    .filter((row) => [
+      AUTOMATION_STATUS.HARD_BOUNCE, AUTOMATION_STATUS.BLOCKED,
+      AUTOMATION_STATUS.INVALID, AUTOMATION_STATUS.SUPPRESSED,
+    ].includes(text(row[EMAIL_COLUMN.STATUS])))
+    .map((row) => text(row[EMAIL_COLUMN.TO]).toLowerCase())
+    .filter(Boolean));
 
   for (let index = 1; index < rows.length; index += 1) {
     const row = rows[index] || [];
-    const sendKey = text(row[0]);
-    const approved = row[11] === true || ["true", "igen", "1"].includes(text(row[11]).toLowerCase());
-    const status = text(row[12]);
-    const manualSent = isChecked(row[18]);
-    if (!sendKey || !approved || manualSent || status === AUTOMATION_STATUS.SENT) { if (sendKey) skipped += 1; continue; }
+    const sendKey = text(row[EMAIL_COLUMN.SEND_KEY]);
+    const approved = isChecked(row[EMAIL_COLUMN.APPROVED]);
+    const status = text(row[EMAIL_COLUMN.STATUS]);
+    const manualSent = isChecked(row[EMAIL_COLUMN.MANUAL_SENT]);
+    if (!sendKey || !approved || manualSent || isFinalEmailStatus(status) || status === AUTOMATION_STATUS.NEEDS_REVIEW) {
+      if (sendKey) skipped += 1;
+      continue;
+    }
     // APPROVED is the durable "claimed for sending" marker. If a Worker dies
     // after Brevo accepted the message but before the final Sheet write, a
     // later click must not send the row again automatically.
-    if (![AUTOMATION_STATUS.READY, AUTOMATION_STATUS.CHANGED_AFTER_SEND].includes(status)) { skipped += 1; continue; }
+    if (status !== AUTOMATION_STATUS.READY) { skipped += 1; continue; }
     if (inFlightSends.has(sendKey)) { skipped += 1; continue; }
 
     const rowIndex = index + 1;
+    if (suppressedRecipients.has(text(row[EMAIL_COLUMN.TO]).toLowerCase())) {
+      const message = "A címhez korábbi hard bounce, blokkolás, érvénytelen cím vagy letiltás tartozik; automatikus küldés leállítva.";
+      await writeSheetRanges(accessToken, pipeline.spreadsheet_id, [
+        { range: `${quoteSheetName(EMAIL_OUTPUT_TAB)}!L${rowIndex}:O${rowIndex}`, values: [[false, AUTOMATION_STATUS.SUPPRESSED, text(row[EMAIL_COLUMN.MESSAGE_ID]), message]] },
+        { range: `${quoteSheetName(EMAIL_OUTPUT_TAB)}!AF${rowIndex}:AH${rowIndex}`, values: [[AUTOMATION_STATUS.SUPPRESSED, new Date().toISOString(), message]] },
+      ]);
+      skipped += 1;
+      continue;
+    }
     inFlightSends.add(sendKey);
     try {
-      if (!text(row[4]) || !text(row[5]) || (!text(row[6]) && !text(row[7]))) throw new Error("Hiányzik a címzett, tárgy vagy levéltörzs.");
+      if (!text(row[EMAIL_COLUMN.TO]) || !text(row[EMAIL_COLUMN.SUBJECT]) || !text(row[EMAIL_COLUMN.PLAIN]) || !text(row[EMAIL_COLUMN.HTML])) {
+        throw new Error("Hiányzik a címzett, tárgy vagy levéltörzs.");
+      }
+      if (!text(row[EMAIL_COLUMN.TEMPLATE_ID]) || !text(row[EMAIL_COLUMN.PARAMS_JSON])) {
+        throw new Error("Hiányzik a Brevo template ID vagy a paraméterek JSON értéke.");
+      }
+      if (/{{|}}|{%|%}/.test([row[EMAIL_COLUMN.SUBJECT], row[EMAIL_COLUMN.PLAIN], row[EMAIL_COLUMN.HTML]].join("\n"))) {
+        throw new Error("Feloldatlan merge tag maradt a jóváhagyott levélben.");
+      }
+      const currentRevisionHash = await emailRevisionHashFromRow(row);
+      if (currentRevisionHash !== text(row[EMAIL_COLUMN.REVISION_HASH])
+          || currentRevisionHash !== text(row[EMAIL_COLUMN.APPROVED_HASH])) {
+        await writeSheetRanges(accessToken, pipeline.spreadsheet_id, [
+          { range: `${quoteSheetName(EMAIL_OUTPUT_TAB)}!L${rowIndex}:M${rowIndex}`, values: [[false, AUTOMATION_STATUS.MANUAL]] },
+          { range: `${quoteSheetName(EMAIL_OUTPUT_TAB)}!O${rowIndex}`, values: [["A jóváhagyott revízió nem egyezik a jelenlegi levéllel; új jóváhagyás szükséges."]] },
+          { range: `${quoteSheetName(EMAIL_OUTPUT_TAB)}!AC${rowIndex}:AE${rowIndex}`, values: [["", "", ""]] },
+        ]);
+        skipped += 1;
+        continue;
+      }
+      let params;
+      try { params = JSON.parse(text(row[EMAIL_COLUMN.PARAMS_JSON])); }
+      catch { throw new Error("A Brevo paraméterek JSON értéke hibás."); }
+      await verifyBrevoTemplate(env, {
+        templateId: Number(row[EMAIL_COLUMN.TEMPLATE_ID]),
+        templateKey: text(row[EMAIL_COLUMN.TEMPLATE_KEY]),
+      }, verifiedTemplates);
       await writeSheetRanges(accessToken, pipeline.spreadsheet_id, [
         { range: `${quoteSheetName(EMAIL_OUTPUT_TAB)}!L${rowIndex}:M${rowIndex}`, values: [[false, AUTOMATION_STATUS.APPROVED]] },
       ]);
-      const brevo = await sendBrevoEmail(env, { to: text(row[4]), subject: text(row[5]), plain: text(row[6]), html: text(row[7]), sendKey });
+      const brevo = await sendBrevoEmail(env, {
+        to: text(row[EMAIL_COLUMN.TO]),
+        toName: params.recipient_first_name || "",
+        templateId: Number(row[EMAIL_COLUMN.TEMPLATE_ID]),
+        params,
+        eventType: text(row[EMAIL_COLUMN.EVENT_TYPE]),
+        sendKey,
+      });
+      const timestamp = new Date().toISOString();
       await writeSheetRanges(accessToken, pipeline.spreadsheet_id, [
-        { range: `${quoteSheetName(EMAIL_OUTPUT_TAB)}!M${rowIndex}:R${rowIndex}`, values: [[AUTOMATION_STATUS.SENT, brevo.messageId || "", "", text(row[15]), new Date().toISOString(), new Date().toISOString()]] },
+        { range: `${quoteSheetName(EMAIL_OUTPUT_TAB)}!M${rowIndex}:R${rowIndex}`, values: [[AUTOMATION_STATUS.ACCEPTED, brevo.messageId || "", "", text(row[EMAIL_COLUMN.SOURCE_HASH]), timestamp, timestamp]] },
+        { range: `${quoteSheetName(EMAIL_OUTPUT_TAB)}!AF${rowIndex}:AH${rowIndex}`, values: [[AUTOMATION_STATUS.ACCEPTED, timestamp, ""]] },
       ]);
-      sent += 1;
+      accepted += 1;
     } catch (error) {
       failed += 1;
+      const failureStatus = error.uncertain ? AUTOMATION_STATUS.NEEDS_REVIEW : AUTOMATION_STATUS.ERROR;
+      if (error.uncertain) needsReview += 1;
       await writeSheetRanges(accessToken, pipeline.spreadsheet_id, [
-        { range: `${quoteSheetName(EMAIL_OUTPUT_TAB)}!M${rowIndex}:O${rowIndex}`, values: [[AUTOMATION_STATUS.ERROR, "", error.message || "Ismeretlen hiba."]] },
+        { range: `${quoteSheetName(EMAIL_OUTPUT_TAB)}!M${rowIndex}:O${rowIndex}`, values: [[failureStatus, "", error.message || "Ismeretlen hiba."]] },
+        { range: `${quoteSheetName(EMAIL_OUTPUT_TAB)}!AF${rowIndex}:AH${rowIndex}`, values: [[failureStatus, new Date().toISOString(), error.message || "Ismeretlen hiba."]] },
       ]);
     } finally {
       inFlightSends.delete(sendKey);
     }
   }
-  return { sent, skipped, failed };
+  return { accepted, sent: accepted, skipped, failed, needs_review: needsReview };
+}
+
+async function verifyBrevoTemplate(env, template, cache) {
+  const cacheKey = `${template.templateId}|${template.templateKey}`;
+  if (cache.has(cacheKey)) return cache.get(cacheKey);
+  const expected = brevoTemplateDefinitions().find((item) => item.key === template.templateKey);
+  if (!expected) throw new Error(`Ismeretlen helyi Brevo-sablonkulcs: ${template.templateKey || "(üres)"}.`);
+  const response = await fetch(`${BREVO_TEMPLATE_URL}/${encodeURIComponent(template.templateId)}`, {
+    headers: { accept: "application/json", "api-key": env.BREVO_API_KEY },
+  });
+  if (!response.ok) throw new Error(`A Brevo-sablon visszaellenőrzése sikertelen (${response.status}): ${(await response.text()).slice(0, 300)}`);
+  const actual = await response.json();
+  if (!actual.isActive) throw new Error(`A Brevo-sablon inaktív: ${template.templateKey} (${template.templateId}).`);
+  if (text(actual.subject) !== expected.subject || text(actual.htmlContent) !== text(expected.htmlContent)) {
+    throw new Error(`A Brevo-sablon tartalma eltér a jóváhagyott repository-verziótól: ${template.templateKey} (${template.templateId}).`);
+  }
+  cache.set(cacheKey, actual);
+  return actual;
 }
 
 async function sendBrevoEmail(env, message) {
   const idempotencyKey = await deterministicUuid(message.sendKey);
-  const response = await fetch(BREVO_SEND_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "api-key": env.BREVO_API_KEY },
-    body: JSON.stringify({
-      sender: { email: env.BREVO_SENDER_EMAIL, name: env.BREVO_SENDER_NAME || "Budai Táncklub" },
-      to: [{ email: message.to }], subject: message.subject, textContent: message.plain,
-      htmlContent: message.html || undefined,
-      headers: { "Idempotency-Key": idempotencyKey, "X-BudaiTanc-Send-Key": message.sendKey },
-    }),
-  });
-  if (!response.ok) throw new Error(`Brevo küldési hiba (${response.status}): ${(await response.text()).slice(0, 300)}`);
+  let response;
+  try {
+    response = await fetch(BREVO_SEND_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "api-key": env.BREVO_API_KEY },
+      body: JSON.stringify({
+        sender: { email: env.BREVO_SENDER_EMAIL, name: env.BREVO_SENDER_NAME || "Budai Táncklub" },
+        to: [{ email: message.to, name: message.toName || undefined }],
+        templateId: message.templateId,
+        params: message.params,
+        replyTo: env.BREVO_REPLY_TO_EMAIL ? { email: env.BREVO_REPLY_TO_EMAIL } : undefined,
+        tags: ["budai-tancklub", text(message.eventType).toLowerCase()].filter(Boolean),
+        headers: { "Idempotency-Key": idempotencyKey, "X-Mailin-custom": `send_key:${message.sendKey}` },
+      }),
+    });
+  } catch (cause) {
+    const error = new Error(`Brevo küldési eredmény bizonytalan: ${cause.message || "hálózati hiba"}`);
+    error.uncertain = true;
+    throw error;
+  }
+  if (!response.ok) {
+    const error = new Error(`Brevo küldési hiba (${response.status}): ${(await response.text()).slice(0, 300)}`);
+    error.uncertain = response.status >= 500;
+    throw error;
+  }
   return response.json();
 }
 
@@ -1037,4 +1532,8 @@ function importResultPage(result, count) {
 
 function escapeHtml(value) { return String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char])); }
 
-export { CSV_HEADERS, extractReferences, findMasterRow, mergeMasterRow, nameSuggestions, normalizeForMatch, parseCsv, parseCsvRegistrations, partitionManualImportRegistrations, paymentFromRow, registrationFromCsvRow };
+export {
+  CSV_HEADERS, brevoSendKey, brevoStatus, emailRevisionHashFromRow, extractReferences, findMasterRow,
+  mergeMasterRow, nameSuggestions, normalizeForMatch, parseCsv, parseCsvRegistrations,
+  partitionManualImportRegistrations, paymentFromRow, recordBrevoEvent, registrationFromCsvRow,
+};
