@@ -870,6 +870,29 @@ async function ensureEmailInfrastructure(accessToken, pipeline) {
     });
   }
 
+  // The master registration Sheet predates the two helper columns (AS:AT).
+  // Values API writes do not grow an existing sheet grid, so explicitly add
+  // columns before writing their headers. This is idempotent: a wider grid is
+  // left untouched.
+  const masterSheet = (metadata.sheets || []).find((sheet) => sheet.properties?.title === pipeline.tab_name);
+  const requiredMasterColumnCount = spreadsheetColumnNumber(STUDENT_FIRST_NAME_COLUMN);
+  const currentMasterColumnCount = Number(masterSheet?.properties?.gridProperties?.columnCount || 0);
+  if (masterSheet && currentMasterColumnCount > 0 && currentMasterColumnCount < requiredMasterColumnCount) {
+    const baseUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(pipeline.spreadsheet_id)}`;
+    await googleFetch(`${baseUrl}:batchUpdate`, accessToken, {
+      method: "POST",
+      body: JSON.stringify({
+        requests: [{
+          appendDimension: {
+            sheetId: masterSheet.properties.sheetId,
+            dimension: "COLUMNS",
+            length: requiredMasterColumnCount - currentMasterColumnCount,
+          },
+        }],
+      }),
+    });
+  }
+
   const writes = [
     { range: `${quoteSheetName(EMAIL_OUTPUT_TAB)}!A1:AH1`, values: [EMAIL_OUTPUT_HEADERS] },
     { range: `${quoteSheetName(EMAIL_EVENT_LOG_TAB)}!A1:I1`, values: [EMAIL_EVENT_LOG_HEADERS] },
@@ -1159,7 +1182,8 @@ async function recordBrevoEvent(accessToken, pipeline, payload) {
   const eventId = await sha256(JSON.stringify({
     brevoId: text(payload.id || payload.event_id), messageId, rawEvent, recipient, eventAt,
   }));
-  if (eventRows.slice(1).some((row) => text(row[0]) === eventId)) {
+  if (eventRows.slice(1).some((row) => text(row[0]) === eventId
+      || (messageId && text(row[1]) === messageId && text(row[8]) === rawEvent))) {
     return { duplicate: true, event: rawEvent, matched: false };
   }
 
@@ -1174,11 +1198,8 @@ async function recordBrevoEvent(accessToken, pipeline, payload) {
   const sendKey = text(matchedRow[EMAIL_COLUMN.SEND_KEY]) || sendKeyFromPayload;
   const reason = text(payload.reason || payload.description || payload.response || payload.error);
   const receivedAt = new Date().toISOString();
-  const eventRowIndex = firstEmptyRow(eventRows, 1);
-  const writes = [{
-    range: `${quoteSheetName(EMAIL_EVENT_LOG_TAB)}!A${eventRowIndex}:I${eventRowIndex}`,
-    values: [[eventId, messageId, sendKey, brevoEventLabel(rawEvent), recipient, eventAt, receivedAt, reason, rawEvent]],
-  }];
+  const eventRow = [eventId, messageId, sendKey, brevoEventLabel(rawEvent), recipient, eventAt, receivedAt, reason, rawEvent];
+  const writes = [];
 
   const mappedStatus = brevoStatus(rawEvent) || AUTOMATION_STATUS.NEEDS_REVIEW;
   if (emailIndex >= 0 && mappedStatus) {
@@ -1198,7 +1219,13 @@ async function recordBrevoEvent(accessToken, pipeline, payload) {
     }
   }
 
-  await writeSheetRanges(accessToken, pipeline.spreadsheet_id, writes);
+  // A Brevo több eseményt is küldhet egyszerre. Az append endpoint atomi, míg
+  // a "következő üres sor" alapú írásnál a párhuzamos Worker-kérések ugyanazt
+  // a sort választhatták volna, és felülírták volna egymást.
+  await Promise.all([
+    appendSheetRows(accessToken, pipeline.spreadsheet_id, EMAIL_EVENT_LOG_TAB, [eventRow]),
+    writes.length ? writeSheetRanges(accessToken, pipeline.spreadsheet_id, writes) : Promise.resolve(),
+  ]);
   return { duplicate: false, event: rawEvent, matched: emailIndex >= 0, send_key: sendKey, status: mappedStatus || "" };
 }
 
@@ -1448,9 +1475,22 @@ async function writeSheetRanges(accessToken, spreadsheetId, data) {
   });
 }
 
+async function appendSheetRows(accessToken, spreadsheetId, tabName, values) {
+  const baseUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}`;
+  const range = encodeURIComponent(`${quoteSheetName(tabName)}!A:I`);
+  await googleFetch(`${baseUrl}/values/${range}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, accessToken, {
+    method: "POST",
+    body: JSON.stringify({ values }),
+  });
+}
+
 async function getSpreadsheetMetadata(accessToken, spreadsheetId) {
   const baseUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}`;
-  return googleFetch(`${baseUrl}?fields=sheets.properties(sheetId,title)`, accessToken);
+  return googleFetch(`${baseUrl}?fields=sheets.properties(sheetId,title,gridProperties(columnCount))`, accessToken);
+}
+
+function spreadsheetColumnNumber(column) {
+  return [...String(column)].reduce((total, char) => total * 26 + char.charCodeAt(0) - 64, 0);
 }
 
 async function deleteRowsByIndex(accessToken, target, rowIndexes) {

@@ -3,7 +3,7 @@ import { brevoTemplateDefinitions } from "../src/email-templates.js";
 const API_ROOT = "https://api.brevo.com/v3";
 const execute = process.argv.includes("--execute");
 const activate = process.argv.includes("--activate");
-const apiKey = process.env.BREVO_API_KEY;
+const apiKey = process.env.BREVO_API_KEY || process.env.BREVO_API;
 const senderEmail = process.env.BREVO_SENDER_EMAIL;
 const senderName = process.env.BREVO_SENDER_NAME || "Budai Táncklub";
 const replyTo = process.env.BREVO_REPLY_TO_EMAIL || "";
@@ -53,7 +53,11 @@ for (const item of actions) {
     : await brevoRequest("/smtp/templates", "POST", body);
   const id = Number(item.existing?.id || result.id);
   const verified = await brevoGet(`/smtp/templates/${id}`);
-  if (verified.tag !== item.tag || verified.subject !== item.definition.subject || Boolean(verified.isActive) !== activate) {
+  if (verified.tag !== item.tag
+      || verified.subject !== item.definition.subject
+      || text(verified.htmlContent) !== text(item.definition.htmlContent)
+      || text(verified.sender?.email).toLowerCase() !== senderEmail.toLowerCase()
+      || Boolean(verified.isActive) !== activate) {
     throw new Error(`A visszaolvasott ${item.definition.key} sablon eltér a kért állapottól.`);
   }
   templateIds[item.definition.key] = id;
@@ -83,4 +87,8 @@ async function brevoRequest(path, method, body) {
 function parseJson(value, name) {
   try { return JSON.parse(value); }
   catch { throw new Error(`${name} nem érvényes JSON.`); }
+}
+
+function text(value) {
+  return value == null ? "" : String(value).trim();
 }

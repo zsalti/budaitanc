@@ -17,6 +17,8 @@
     "test:smoke": "node test-smoke.mjs",
     "brevo:inspect": "node scripts/inspect-brevo.mjs",
     "brevo:templates": "node scripts/sync-brevo-templates.mjs",
+    "brevo:preview": "node scripts/render-template-previews.mjs",
+    "brevo:control-tests": "node scripts/send-brevo-control-tests.mjs",
     "brevo:webhook": "node scripts/sync-brevo-webhook.mjs",
     "generate:payment-fixture": "node scripts/generate-payment-fixture.mjs"
   }

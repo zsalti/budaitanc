@@ -1,5 +1,5 @@
 const API_ROOT = "https://api.brevo.com/v3";
-const apiKey = process.env.BREVO_API_KEY;
+const apiKey = process.env.BREVO_API_KEY || process.env.BREVO_API;
 
 if (!apiKey) {
   console.error("Hiányzik a BREVO_API_KEY környezeti változó.");
@@ -8,7 +8,7 @@ if (!apiKey) {
   const [senders, templates, webhooks] = await Promise.all([
     brevoGet("/senders"),
     brevoGet("/smtp/templates?limit=1000&sort=desc"),
-    brevoGet("/webhooks?type=transactional&sort=desc"),
+    brevoGetWebhooks(),
   ]);
   const requestedTemplateId = argumentValue("--template-id");
   const template = requestedTemplateId ? await brevoGet(`/smtp/templates/${encodeURIComponent(requestedTemplateId)}`) : null;
@@ -35,6 +35,18 @@ async function brevoGet(path) {
   const response = await fetch(`${API_ROOT}${path}`, { headers: { accept: "application/json", "api-key": apiKey } });
   if (!response.ok) throw new Error(`Brevo GET ${path} sikertelen (${response.status}): ${(await response.text()).slice(0, 500)}`);
   return response.json();
+}
+
+async function brevoGetWebhooks() {
+  const response = await fetch(`${API_ROOT}/webhooks?type=transactional&sort=desc`, {
+    headers: { accept: "application/json", "api-key": apiKey },
+  });
+  if (response.ok) return response.json();
+  const body = await response.text();
+  // Brevo returns document_not_found instead of an empty collection for some
+  // accounts that have no transactional webhook yet.
+  if (response.status === 400 && body.includes("document_not_found")) return { webhooks: [] };
+  throw new Error(`Brevo GET /webhooks sikertelen (${response.status}): ${body.slice(0, 500)}`);
 }
 
 function argumentValue(name) {

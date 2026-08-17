@@ -64,6 +64,7 @@ const automationConfigState = [[
 const emailOutputState = [[...EMAIL_OUTPUT_HEADERS]];
 const emailEventLogState = [[...EMAIL_EVENT_LOG_HEADERS]];
 const emailSettingsState = emailSettingsSheetRows();
+let masterColumnCount = 44;
 let nextTemplateId = 101;
 for (const row of emailSettingsState) {
   if (String(row[0] || "").startsWith("TEMPLATE_")) row[1] = nextTemplateId++;
@@ -107,12 +108,21 @@ globalThis.fetch = async (input, options = {}) => {
     }
     return new Response(JSON.stringify({ replies: [] }), { status: 200 });
   }
+  if (url.includes("test-spreadsheet:batchUpdate")) {
+    const body = JSON.parse(options.body);
+    for (const request of body.requests) {
+      if (request.appendDimension?.sheetId === 1 && request.appendDimension.dimension === "COLUMNS") {
+        masterColumnCount += request.appendDimension.length;
+      }
+    }
+    return new Response(JSON.stringify({ replies: [] }), { status: 200 });
+  }
   if (url.includes("test-staff-spreadsheet?fields=")) {
     return new Response(JSON.stringify({ sheets: [{ properties: { sheetId: 42, title: "TAGOK 2026-27" } }] }), { status: 200 });
   }
   if (url.includes("test-spreadsheet?fields=")) {
     return new Response(JSON.stringify({ sheets: [
-      { properties: { sheetId: 1, title: " TAGOK I FÉLÉV" } },
+      { properties: { sheetId: 1, title: " TAGOK I FÉLÉV", gridProperties: { columnCount: masterColumnCount } } },
       { properties: { sheetId: 2, title: "Befizetések napló" } },
       { properties: { sheetId: 3, title: "Függő befizetések" } },
       { properties: { sheetId: 4, title: "Automata kalk" } },
@@ -120,6 +130,12 @@ globalThis.fetch = async (input, options = {}) => {
       { properties: { sheetId: 6, title: "E-mail beállítások" } },
       { properties: { sheetId: 7, title: "E-mail eseménynapló" } },
     ] }), { status: 200 });
+  }
+  if (url.includes(":append")) {
+    const body = JSON.parse(options.body);
+    const range = decodedUrl.split("/values/")[1].split(":append")[0];
+    stateForRange(range, url).push(...body.values);
+    return new Response(JSON.stringify({ updates: { updatedRows: body.values.length } }), { status: 200 });
   }
   if (url.includes("www.googleapis.com/drive/v3/files/test-payment-file?alt=media")) {
     return new Response(paymentFixture, { status: 200 });
@@ -178,6 +194,12 @@ try {
   const health = await worker.fetch(new Request("https://example.test/healthz"), env);
   assert.equal(health.status, 200);
   assert.deepEqual(await health.json(), { status: "ok" });
+
+  const setup = await worker.fetch(new Request("https://example.test/emails/setup/test-email-token", {
+    method: "POST", body: JSON.stringify({ pipeline_id: pipeline.pipeline_id }),
+  }), env);
+  assert.equal(setup.status, 200);
+  assert.equal(masterColumnCount, 46);
 
   const unauthorized = await worker.fetch(new Request("https://example.test/import/wrong"), env);
   assert.equal(unauthorized.status, 404);

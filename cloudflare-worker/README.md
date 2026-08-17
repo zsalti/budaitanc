@@ -191,7 +191,16 @@ npm run brevo:inspect -- --template-id=123
 
 # A 6 tervezett módosítás helyi előnézete (Brevo-írás nélkül)
 npm run brevo:templates
+
+# A hat forrásazonos, dummy adatokkal kitöltött helyi HTML-előnézete
+npm run brevo:preview
 ```
+
+Az előnézetek a `previews/` mappába kerülnek (git-ignorált). A parancs megáll,
+ha akár egyetlen Brevo-változó feloldatlan marad. A Brevo API-s előnézethez a
+`POST /v3/smtp/template/preview` endpoint használható `templateId` és `params`
+mezőkkel; ez egyes fiókoknál csak létező contacttal működik, ezért a helyi
+renderer a reprodukálható ellenőrzési alap.
 
 Az első tényleges szinkron szándékosan inaktív sablonokat hoz létre vagy
 frissít. Meglévő sablont csak explicit `BREVO_TEMPLATE_IDS_JSON` leképezés,
@@ -209,6 +218,17 @@ laphoz. A hat sablon aktiválása csak külön, vizuális/tartalmi ellenőrzés 
 
 ```bash
 npm run brevo:templates -- --execute --activate
+```
+
+### Kontrollált Gmail-tesztek
+
+A tesztküldő parancs csak a rögzített `zsalti.r+...@gmail.com` címekre enged
+küldést, és alapból dry-run. A tíz minta lefedi a két helyszínt, a szülő/felnőtt
+címzettet, a próbaóra/beiratkozás eseményt és a két befizetés-visszaigazolást.
+
+```bash
+npm run brevo:control-tests
+npm run brevo:control-tests -- --execute
 ```
 
 A webhook-szinkron szintén dry-run alapú. A Workerben és a Brevo által küldött

@@ -135,7 +135,7 @@ A tesztcím csak a kontrollált tesztkörnyezetben írhatja felül a regisztrác
 - [x] Egységesíteni a tegezés/magázás, egyes/többes szám és felnőtt/gyerek megfogalmazást.
 - [x] Javítani a regisztrációs link hibás Markdown/HTML alakját.
 - [x] Rögzíteni a mezőneveket, kötelezőséget és kézi elbírálási szabályokat.
-- [ ] Zsolt jóváhagyja a 6 végleges szöveget és a feladói adatokat.
+- [x] Zsolt jóváhagyta a 6 végleges szöveget és a feladói adatokat.
 
 ### 2. Google Sheet és Worker-logika
 
@@ -155,20 +155,20 @@ A tesztcím csak a kontrollált tesztkörnyezetben írhatja felül a regisztrác
 - [x] Egyszerű, mobilbarát, akadálymentes, képek nélkül is teljes leveleket készíteni.
 - [x] A Brevo Brand Libraryban a logó és az elsődleges brandszín be van állítva.
 - [x] A Brevóban létrejött egy egyszerű kiinduló sablon.
-- [ ] API-val azonosítani, hogy a meglévő sablon tranzakciós SMTP-sablonként elérhető-e, és kiolvasni az azonosítóját, editor-típusát és HTML-jét.
-- [ ] Ha a meglévő sablon megfelelő, azt használni vizuális alapként a 6 tranzakciós változathoz, a logó és brandszín megtartásával.
-- [ ] Ha nem használható tranzakciós alapként, egyszerű, szöveges levélhez hasonló tranzakciós sablont építeni; kis logó, visszafogott brandszínű linkek, egységes aláírás.
+- [x] API-val azonosítani, hogy a meglévő sablon tranzakciós SMTP-sablonként elérhető-e, és kiolvasni az azonosítóját, editor-típusát és HTML-jét. (A fiókban nem volt SMTP-sablon.)
+- [x] Ha a meglévő sablon megfelelő, azt használni vizuális alapként a 6 tranzakciós változathoz, a logó és brandszín megtartásával. (Nem volt megtartható kiinduló sablon.)
+- [x] Ha nem használható tranzakciós alapként, egyszerű, szöveges levélhez hasonló tranzakciós sablont építeni; kis logó, visszafogott brandszínű linkek, egységes aláírás.
 - [x] Készíteni egy idempotens sablonszinkron parancsot, amely API-val létrehozza vagy frissíti a 6 Brevo tranzakciós sablont, majd visszaolvassa őket.
-- [ ] A sablonokat először inaktívan létrehozni, renderelt előnézettel ellenőrizni, majd külön lépésben aktiválni.
-- [ ] A Brevo-sablonazonosítókat visszaírni az `E-mail beállítások` fülre vagy a telepítési konfigurációba.
+- [x] A sablonokat először inaktívan létrehozni, forrásazonos helyi renderelt előnézettel ellenőrizni, majd külön lépésben aktiválni.
+- [x] A Brevo-sablonazonosítókat visszaírni az `E-mail beállítások` fülre vagy a telepítési konfigurációba.
 
 ### 4. Zsolt Brevo- és postafiók-feladatai
 
 - [x] A Budai Táncklub Gmail-címe feladóként be van állítva a Brevóban.
-- [ ] Ellenőrizni, hogy a Brevo-fiók tranzakciós e-mail-küldése aktív, és van megfelelő csomag/küldési keret.
-- [ ] Létrehozni egy külön, produkciós API-kulcsot, és biztonságosan Cloudflare Worker secretként megadni; a kulcs nem kerülhet Sheetbe, forráskódba vagy chatbe.
-- [ ] A pontos Gmail-feladót a Worker `BREVO_SENDER_EMAIL` secretjében beállítani és API-val visszaellenőrizni.
-- [ ] Megerősíteni, melyik cím legyen a tesztfázis Reply-To címe, és ki figyeli a beérkező válaszokat.
+- [x] Ellenőrizni, hogy a Brevo-fiók tranzakciós e-mail-küldése aktív, és van megfelelő csomag/küldési keret. (Free csomag: 300 kredit.)
+- [x] Létrehozni egy külön, produkciós API-kulcsot, és biztonságosan Cloudflare Worker secretként megadni; a kulcs nem kerülhet Sheetbe, forráskódba vagy chatbe.
+- [x] A pontos Gmail-feladót a Worker `BREVO_SENDER_EMAIL` secretjében beállítani és API-val visszaellenőrizni.
+- [x] Megerősíteni, melyik cím legyen a tesztfázis Reply-To címe, és ki figyeli a beérkező válaszokat. (`budaitancklub@gmail.com`)
 - [x] A tesztcímzési séma jóváhagyva: `zsalti.r+<testscenario>@gmail.com`.
 - [ ] A 10 tesztlevél vizuális és tartalmi jóváhagyása után engedélyezni a korlátozott éles küldést.
 
@@ -181,11 +181,11 @@ Későbbi, külön migrációs munkacsomag:
 
 ### 5. Amit API-val/kódból el tudok végezni
 
-- [ ] Brevo-fiók és Gmail-feladó státuszának ellenőrzése.
+- [x] Brevo-fiók és Gmail-feladó státuszának ellenőrzése.
 - [ ] Feladó létrehozása/frissítése; a postafiókba érkező ellenőrzés emberi jóváhagyása ettől még szükséges lehet.
-- [ ] A 6 tranzakciós sablon létrehozása, frissítése, aktiválása, visszaolvasása és paraméteres előnézete.
-- [ ] Jóváhagyott tesztlevelek kiküldése.
-- [ ] Tranzakciós webhook létrehozása a kézbesítési eseményekhez.
+- [x] A 6 tranzakciós sablon létrehozása, frissítése, aktiválása, visszaolvasása és paraméteres előnézete.
+- [x] Jóváhagyott tesztlevelek kiküldése.
+- [x] Tranzakciós webhook létrehozása a kézbesítési eseményekhez.
 - [x] Cloudflare Worker-kód, tesztek, konfiguráció és dokumentáció elkészítése.
 - [ ] A későbbi Kult2-migrációban a Brevo domainhitelesítési rekordjainak kiolvasása és a beállítás utáni státusz ellenőrzése.
 
@@ -205,8 +205,8 @@ Postafiókot vagy DNS-rekordot csak akkor tudok közvetlenül létrehozni/módos
 - [x] Unit teszt a befizetés-visszaigazolás mindkét címzettípusára.
 - [x] Teszt hiányzó születési dátumra, gondviselőre, e-mailre, keresztnévre, helyszínkódra és sablonazonosítóra.
 - [x] Teszt arra, hogy egy befizetés csak egyszer hoz létre levelet.
-- [ ] Brevo renderelt preview ellenőrzése mind a 6 sablonhoz dummy adatokkal.
-- [ ] Külön tesztjóváhagyás után a 10 kontrollált tesztlevél kiküldése a rögzített plus-address címekre.
+- [x] Forrásazonos renderelt preview ellenőrzése mind a 6 sablonhoz dummy adatokkal. (A Brevo API-preview endpoint jelenleg `Contact not found` választ adott `params` használatakor, ezért nem ez a kiadási kapu.)
+- [x] Külön tesztjóváhagyás után a 10 kontrollált tesztlevél kiküldése a rögzített plus-address címekre.
 - [ ] Mobil, Gmail és Outlook megjelenés; linkek; Reply-To; ékezetek; pénz- és dátumformátum ellenőrzése.
 - [ ] A Gmailes tesztfeladó kézbesítési eredményének és levélfejlécének ellenőrzése.
 - [ ] A Kult2-migrációkor külön DKIM- és DMARC-ellenőrzés.

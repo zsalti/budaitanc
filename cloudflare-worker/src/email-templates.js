@@ -375,7 +375,7 @@ function paymentContent(p, adult) {
 
 function wrapHtml(body, p) {
   const color = safeColor(p.brand_color) || "#4b5563";
-  return `<!doctype html><html lang="hu"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Budai Táncklub</title></head><body style="margin:0;background:#f5f5f5;color:#222;font-family:Arial,Helvetica,sans-serif"><div style="display:none;max-height:0;overflow:hidden">Budai Táncklub értesítés</div><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f5f5f5"><tr><td align="center" style="padding:24px 12px"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:640px;background:#fff;border-top:4px solid ${a(color)}"><tr><td style="padding:28px 32px;font-size:16px;line-height:1.55">${body}</td></tr></table></td></tr></table></body></html>`;
+  return `<!doctype html><html lang="hu"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Budai Táncklub</title><style>a{color:${a(color)}}</style></head><body style="margin:0;background:#f5f5f5;color:#222;font-family:Arial,Helvetica,sans-serif"><div style="display:none;max-height:0;overflow:hidden">Budai Táncklub értesítés</div><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f5f5f5"><tr><td align="center" style="padding:24px 12px"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:640px;background:#fff;border-top:4px solid ${a(color)}"><tr><td style="padding:28px 32px;font-size:16px;line-height:1.55">${body}</td></tr></table></td></tr></table></body></html>`;
 }
 
 function signaturePlain(p) {
