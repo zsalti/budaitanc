@@ -62,6 +62,16 @@ for (const venue of venues) {
       assert.equal(draft.sendReady, true);
       assert.match(draft.plain, venue.address);
       assert.match(draft.plain, audience.expected);
+      if (eventType === EMAIL_EVENT.TRIAL && venue.code === "agnesterem") {
+        assert.match(draft.plain, /Részvételi díj: 2600 Ft \(a Kapás utcai főépületben, az óra előtt fizethető készpénzzel vagy bankkártyával az információs pultnál\)/);
+        assert.doesNotMatch(draft.plain, /Részvételi díj: 2600 Ft \(helyszínen,/);
+      }
+      if (eventType === EMAIL_EVENT.TRIAL && venue.code === "kapas") {
+        assert.match(draft.plain, /Részvételi díj: 2600 Ft \(helyszínen, az óra előtt fizethető készpénzzel vagy bankkártyával az információs pultnál\)/);
+      }
+      if (eventType === EMAIL_EVENT.ENROLLMENT) {
+        assert.match(draft.plain, new RegExp(`Közlemény: "Budai táncklub tandíj ${audience.registration.entryId}"`));
+      }
       assert.doesNotMatch(draft.plain, /{{|}}|{%|%}/);
       assert.doesNotMatch(draft.html, /{{|}}|{%|%}/);
       assert.ok(draft.templateId);
@@ -97,7 +107,7 @@ assert.equal(definitions.length, 6);
 assert.equal(new Set(definitions.map((item) => item.key)).size, 6);
 definitions.forEach((definition) => {
   assert.match(definition.htmlContent, /{{params\./);
-  assert.match(definition.templateName, /2026-08-16-v2/);
+  assert.match(definition.templateName, /2026-08-18-v3/);
 });
 
 console.log("Email template tests passed (10 scenarios). ");

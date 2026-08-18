@@ -1,6 +1,6 @@
 import { formatDate, formatMoney, parseDate } from "./fee-engine.js";
 
-export const TEMPLATE_VERSION = "2026-08-16-v2";
+export const TEMPLATE_VERSION = "2026-08-18-v3";
 
 export const EMAIL_EVENT = Object.freeze({
   TRIAL: "TRIAL",
@@ -35,6 +35,7 @@ const PARAM_NAMES = [
   "recipient_first_name", "student_first_name", "student_full_name", "course_name",
   "class_datetime", "venue_name", "venue_address", "venue_note", "venue_detail", "amount_formatted", "bank_account_number",
   "beneficiary_name", "payment_reference", "registration_url", "house_rules_url",
+  "trial_payment_instruction",
   "signature_name", "signature_title", "signature_phone", "signature_company",
   "signature_institution", "signature_address", "brand_color",
 ];
@@ -191,7 +192,11 @@ export function buildEmailDraft(registration, calculation, settings = defaultEma
     amount_formatted: formatMoney(calculation?.fee || registration.amount || 0),
     bank_account_number: settings.bankAccountNumber,
     beneficiary_name: settings.beneficiaryName,
-    payment_reference: [settings.paymentReferencePrefix, text(registration.entryId)].filter(Boolean).join(" "),
+    // A tandíjbeazonosítás a fő Sheet első (Közlemény) oszlopában tárolt
+    // bejegyzésazonosítóval történik, ezért nem lehet egy régi beállítási
+    // értékkel felülírni.
+    payment_reference: paymentReference(registration.entryId),
+    trial_payment_instruction: trialPaymentInstruction(venue?.code),
     registration_url: settings.registrationUrl,
     house_rules_url: settings.houseRulesUrl,
     signature_name: settings.signature.name,
@@ -309,14 +314,14 @@ function trialContent(p, adult) {
   const plain = [
     greeting, "", intro, "", "A próbaóra részletei:", `- Időpont: ${p.class_datetime}`,
     `- Helyszín: ${p.venue_name} – ${p.venue_detail}`,
-    `- Részvételi díj: ${p.amount_formatted} (helyszínen, az óra előtt fizethető készpénzzel vagy bankkártyával az információs pultnál)`,
+    `- Részvételi díj: ${p.amount_formatted} (${p.trial_payment_instruction})`,
     "", "Érkezéskor:", arrival, "", "Mi a teendő a próbaóra után?", after, "",
     `Beiratkozni ezen a linken tud${adult ? "" : "nak"}: ${p.registration_url}`, "",
     `${rules} ${p.house_rules_url}`, "", closing, "", signaturePlain(p),
   ].join("\n");
   const html = [
     paragraph(greeting), paragraph(intro), heading("A próbaóra részletei:"),
-    `<ul><li><strong>Időpont:</strong> ${e(p.class_datetime)}</li><li><strong>Helyszín:</strong> ${e(p.venue_name)} – ${e(p.venue_detail)}</li><li><strong>Részvételi díj:</strong> ${e(p.amount_formatted)} <em>(helyszínen, az óra előtt fizethető készpénzzel vagy bankkártyával az információs pultnál)</em></li></ul>`,
+    `<ul><li><strong>Időpont:</strong> ${e(p.class_datetime)}</li><li><strong>Helyszín:</strong> ${e(p.venue_name)} – ${e(p.venue_detail)}</li><li><strong>Részvételi díj:</strong> ${e(p.amount_formatted)} <em>(${e(p.trial_payment_instruction)})</em></li></ul>`,
     heading("Érkezéskor:"), paragraph(arrival), heading("Mi a teendő a próbaóra után?"), paragraph(after),
     paragraph(`Beiratkozni <a href="${a(p.registration_url)}">ezen a linken</a> tud${adult ? "" : "nak"}.`),
     paragraph(`${rules.replace("házirendjének", `<a href="${a(p.house_rules_url)}">házirendjének</a>`)}`),
@@ -409,6 +414,12 @@ function classDateTime(firstClass) {
 }
 
 function courseDisplayName(raw) { return text(raw).split("/")[0].trim(); }
+function paymentReference(entryId) { return ["Budai táncklub tandíj", text(entryId)].filter(Boolean).join(" "); }
+function trialPaymentInstruction(venueCode) {
+  return text(venueCode).toUpperCase() === "AGNES"
+    ? "a Kapás utcai főépületben, az óra előtt fizethető készpénzzel vagy bankkártyával az információs pultnál"
+    : "helyszínen, az óra előtt fizethető készpénzzel vagy bankkártyával az információs pultnál";
+}
 function venueDetail(venue) { return venue ? [venue.address, venue.note].filter(Boolean).join(" ") : ""; }
 function normalizeName(value) { return text(value).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim(); }
 function positiveNumber(value) { const parsed = Number(String(value || "").replace(/[^0-9.]/g, "")); return Number.isFinite(parsed) && parsed > 0 ? parsed : 0; }
