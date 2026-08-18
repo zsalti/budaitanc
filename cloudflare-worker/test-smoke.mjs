@@ -312,9 +312,9 @@ try {
   readyRow[18] = "Minta Anna";
   sheetState.push(readyRow);
   const legacyManualRow = Array.from({ length: 34 }, () => "");
-  legacyManualRow[0] = "LEGACY-MANUAL-001|PRÓBA|2026-08-03-v1-draft";
+  legacyManualRow[0] = "LEGACY-MANUAL-001|1|2026-08-03-v1-draft";
   legacyManualRow[1] = "LEGACY-MANUAL-001";
-  legacyManualRow[2] = "PRÓBA";
+  legacyManualRow[2] = "1";
   legacyManualRow[3] = "2026-08-03-v1-draft";
   legacyManualRow[12] = "ELKÜLDVE";
   legacyManualRow[13] = "MANUÁLIS";

@@ -980,6 +980,18 @@ async function refreshEmailDrafts(accessToken, pipeline, entryIds = null) {
 
     const periodKey = emailPeriodKey(registration, calculation);
     const sendKey = `${entryId}|${eventType}|${periodKey}|${TEMPLATE_VERSION}`;
+    if (hasLegacyManualEmailHistory(mutableEmailRows, entryId)) {
+      results.push({
+        entry_id: entryId,
+        row_index: mainRow,
+        event_type: eventType,
+        status: AUTOMATION_STATUS.MANUAL,
+        reason: "Korábbi rendszerben manuálisan elküldve; automatikus piszkozat nem készül.",
+        fee: calculation.fee || "",
+        first_class: firstClassValue,
+      });
+      continue;
+    }
     const existingIndex = findExistingEmailRowIndex(mutableEmailRows, sendKey, entryId, eventType, periodKey);
     const existing = existingIndex >= 0 ? mutableEmailRows[existingIndex] : [];
     if (existingIndex >= 0 && text(existing[EMAIL_COLUMN.SEND_KEY]) !== sendKey && isChecked(existing[EMAIL_COLUMN.MANUAL_SENT])) {
@@ -1080,6 +1092,14 @@ async function refreshPaymentEmailDrafts(accessToken, pipeline, entryIds) {
     }));
     const periodKey = "PAYMENT_RECEIVED|1";
     const sendKey = `${entryId}|${periodKey}|${TEMPLATE_VERSION}`;
+    if (hasLegacyManualEmailHistory(mutableEmailRows, entryId)) {
+      results.push({
+        entry_id: entryId,
+        status: AUTOMATION_STATUS.MANUAL,
+        reason: "Korábbi rendszerben manuálisan elküldve; automatikus piszkozat nem készül.",
+      });
+      continue;
+    }
     const existingIndex = findExistingEmailRowIndex(
       mutableEmailRows, sendKey, entryId, EMAIL_EVENT.PAYMENT_RECEIVED, periodKey,
     );
@@ -1178,6 +1198,15 @@ function findExistingEmailRowIndex(rows, sendKey, entryId, eventType, periodKey)
     && text(emailRow[EMAIL_COLUMN.ENTRY_ID]) === entryId
     && emailEventTypeFromRow(emailRow) === eventType
     && emailPeriodKeyFromRow(emailRow) === periodKey
+  ));
+}
+
+function hasLegacyManualEmailHistory(rows, entryId) {
+  return rows.some((emailRow, emailIndex) => (
+    emailIndex > 0
+    && isChecked(emailRow[EMAIL_COLUMN.MANUAL_SENT])
+    && text(emailRow[EMAIL_COLUMN.ENTRY_ID]) === entryId
+    && text(emailRow[EMAIL_COLUMN.TEMPLATE_VERSION]) !== TEMPLATE_VERSION
   ));
 }
 
