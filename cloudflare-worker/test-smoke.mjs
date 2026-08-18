@@ -311,12 +311,27 @@ try {
   readyRow[17] = "recipient@example.invalid";
   readyRow[18] = "Minta Anna";
   sheetState.push(readyRow);
+  const legacyManualRow = Array.from({ length: 34 }, () => "");
+  legacyManualRow[0] = "LEGACY-MANUAL-001|PRÓBA|2026-08-03-v1-draft";
+  legacyManualRow[1] = "LEGACY-MANUAL-001";
+  legacyManualRow[2] = "PRÓBA";
+  legacyManualRow[3] = "2026-08-03-v1-draft";
+  legacyManualRow[12] = "ELKÜLDVE";
+  legacyManualRow[13] = "MANUÁLIS";
+  legacyManualRow[18] = true;
+  emailOutputState.push(legacyManualRow);
+  const legacyMasterRow = [...readyRow];
+  legacyMasterRow[0] = "LEGACY-MANUAL-001";
+  legacyMasterRow[8] = "igen";
+  sheetState.push(legacyMasterRow);
   const drafts = await worker.fetch(new Request("https://example.test/emails/drafts/test-email-token", {
     method: "POST", body: JSON.stringify({ pipeline_id: pipeline.pipeline_id }),
   }), env);
   assert.equal(drafts.status, 200);
   const readyEmail = emailOutputState.find((row) => row[1] === "TEST-EMAIL-001");
   assert.equal(readyEmail[12], "KÜLDHETŐ");
+  assert.equal(emailOutputState.filter((row) => row[1] === "LEGACY-MANUAL-001").length, 1);
+  assert.equal(legacyManualRow[18], true);
   readyEmail[12] = "ELKÜLDVE";
   readyEmail[13] = "MANUÁLIS";
   readyEmail[18] = true;

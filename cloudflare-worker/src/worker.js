@@ -980,8 +980,20 @@ async function refreshEmailDrafts(accessToken, pipeline, entryIds = null) {
 
     const periodKey = emailPeriodKey(registration, calculation);
     const sendKey = `${entryId}|${eventType}|${periodKey}|${TEMPLATE_VERSION}`;
-    const existingIndex = mutableEmailRows.findIndex((emailRow, emailIndex) => emailIndex > 0 && text(emailRow[0]) === sendKey);
+    const existingIndex = findExistingEmailRowIndex(mutableEmailRows, sendKey, entryId, eventType, periodKey);
     const existing = existingIndex >= 0 ? mutableEmailRows[existingIndex] : [];
+    if (existingIndex >= 0 && text(existing[EMAIL_COLUMN.SEND_KEY]) !== sendKey && isChecked(existing[EMAIL_COLUMN.MANUAL_SENT])) {
+      results.push({
+        entry_id: entryId,
+        row_index: mainRow,
+        event_type: eventType,
+        status: AUTOMATION_STATUS.MANUAL,
+        reason: "Korábban manuálisan elküldve; új automatikus piszkozat nem készül.",
+        fee: calculation.fee || "",
+        first_class: firstClassValue,
+      });
+      continue;
+    }
     if (text(existing[15]) !== sourceHash) {
       const manualSent = isChecked(existing[18]);
       const baseStatus = calculation.status === AUTOMATION_STATUS.READY
@@ -1068,8 +1080,18 @@ async function refreshPaymentEmailDrafts(accessToken, pipeline, entryIds) {
     }));
     const periodKey = "PAYMENT_RECEIVED|1";
     const sendKey = `${entryId}|${periodKey}|${TEMPLATE_VERSION}`;
-    const existingIndex = mutableEmailRows.findIndex((emailRow, emailIndex) => emailIndex > 0 && text(emailRow[0]) === sendKey);
+    const existingIndex = findExistingEmailRowIndex(
+      mutableEmailRows, sendKey, entryId, EMAIL_EVENT.PAYMENT_RECEIVED, periodKey,
+    );
     const existing = existingIndex >= 0 ? mutableEmailRows[existingIndex] : [];
+    if (existingIndex >= 0 && text(existing[EMAIL_COLUMN.SEND_KEY]) !== sendKey && isChecked(existing[EMAIL_COLUMN.MANUAL_SENT])) {
+      results.push({
+        entry_id: entryId,
+        status: AUTOMATION_STATUS.MANUAL,
+        reason: "Korábban manuálisan elküldve; új automatikus piszkozat nem készül.",
+      });
+      continue;
+    }
     if (text(existing[EMAIL_COLUMN.SOURCE_HASH]) === sourceHash) {
       results.push({ entry_id: entryId, status: text(existing[EMAIL_COLUMN.STATUS]), reason: text(existing[EMAIL_COLUMN.EXPLANATION]) });
       continue;
@@ -1141,6 +1163,37 @@ function emailPeriodKey(registration, calculation) {
   const candidate = text(registration.startDate) || text(registration.submittedAt);
   const month = Number((candidate.match(/^\d{4}[-./](\d{1,2})/) || [])[1]);
   return month >= 2 && month <= 5 ? "2" : "1";
+}
+
+function findExistingEmailRowIndex(rows, sendKey, entryId, eventType, periodKey) {
+  const exactIndex = rows.findIndex((emailRow, emailIndex) => emailIndex > 0 && text(emailRow[EMAIL_COLUMN.SEND_KEY]) === sendKey);
+  if (exactIndex >= 0) return exactIndex;
+
+  // Before versioned Brevo templates, manually sent rows used a shorter key
+  // without an explicit event type. Treat a matching manual history row as
+  // authoritative so a template-version upgrade cannot create a duplicate.
+  return rows.findIndex((emailRow, emailIndex) => (
+    emailIndex > 0
+    && isChecked(emailRow[EMAIL_COLUMN.MANUAL_SENT])
+    && text(emailRow[EMAIL_COLUMN.ENTRY_ID]) === entryId
+    && emailEventTypeFromRow(emailRow) === eventType
+    && emailPeriodKeyFromRow(emailRow) === periodKey
+  ));
+}
+
+function emailEventTypeFromRow(row) {
+  const explicitEventType = text(row[EMAIL_COLUMN.EVENT_TYPE]);
+  if (explicitEventType) return explicitEventType;
+  const keyParts = text(row[EMAIL_COLUMN.SEND_KEY]).split("|");
+  if (keyParts[1] === EMAIL_EVENT.PAYMENT_RECEIVED || keyParts[1] === "PAYMENT_RECEIVED") return EMAIL_EVENT.PAYMENT_RECEIVED;
+  return keyParts[1] === "PRÓBA" ? EMAIL_EVENT.TRIAL : EMAIL_EVENT.ENROLLMENT;
+}
+
+function emailPeriodKeyFromRow(row) {
+  const explicitPeriodKey = text(row[EMAIL_COLUMN.PERIOD]);
+  if (explicitPeriodKey) return explicitPeriodKey;
+  const keyParts = text(row[EMAIL_COLUMN.SEND_KEY]).split("|");
+  return keyParts[1] === "PAYMENT_RECEIVED" ? `${keyParts[1]}|${keyParts[2] || ""}` : text(keyParts[1]);
 }
 
 function firstEmptyRow(rows, keyColumn) {
