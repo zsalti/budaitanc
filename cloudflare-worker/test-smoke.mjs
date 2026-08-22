@@ -13,7 +13,7 @@ import worker, {
   partitionManualImportRegistrations,
   paymentFromRow,
 } from "./src/worker.js";
-import { brevoTemplateDefinitions, emailSettingsSheetRows } from "./src/email-templates.js";
+import { TEMPLATE_VERSION, brevoTemplateDefinitions, emailSettingsSheetRows } from "./src/email-templates.js";
 
 const fixture = await fs.readFile(
   new URL("./test-fixtures/dami-registration.csv", import.meta.url),
@@ -47,10 +47,10 @@ const env = {
 };
 
 const sheetState = [
-  ["Közlemény", "Tanfolyam neve", "Nap és terem", "Óra ideje", "Táncpedagógusok", "Jelentkező (növendék) neve", "Jelentkezés ideje", "Tanfolyamon részvétel kezdete / naptár", "Próbaórára jelentkezés", "I. féléves tandíj", "I. féléves tandíjfizetés dátuma", "I. tagsági kiállítva", "Egyéb megjegyzés", "Más óraszámban jár", "Születési dátum", "Lakcím", "Telefon", "E-mail cím", "Törvényes képviselő, szülő neve", "Kerület Kártya száma", "Kerület Kártya lejárati dátuma", "Kerület Kártya fotója", "Testvér neve", "Testvér csoportja", "Rendelkezik jóváírható összeggel", "Számlázási adatok", "Számlázási email"],
+  ["Közlemény", "Tanfolyam neve", "Nap és terem", "Óra ideje", "Táncpedagógusok", "Jelentkező (növendék) neve", "Jelentkezés ideje", "Tanfolyamon részvétel kezdete / naptár", "Próbaórára jelentkezés", "I. féléves tandíj", "I. féléves tandíjfizetés dátuma", "I. tagsági kiállítva", "Egyéb megjegyzés", "Más óraszámban jár", "Születési dátum", "Lakcím", "Telefon", "E-mail cím", "Törvényes képviselő, szülő neve", "Kerület Kártya száma", "Kerület Kártya lejárati dátuma", "Kerület Kártya fotója", "Testvér neve", "Testvér csoportja", "Rendelkezik jóváírható összeggel", "Számlázási adatok", "Számlázási email", "II. féléves tandíjfizetés dátuma"],
 ];
 const staffState = [
-  ["Közlemény", "Tanfolyam", "Nap és terem", "Óra ideje", "Táncpedagógusok", "Jelentkező (növendék) neve", "Jelentkezés ideje", "Tanfolyamon részvétel kezdete / naptár"],
+  ["Közlemény", "Tanfolyam", "Nap és terem", "Óra ideje", "Táncpedagógusok", "Jelentkező (növendék) neve", "Jelentkezés ideje", "Tanfolyamon részvétel kezdete / naptár", "Belső megjegyzés"],
 ];
 const paymentLogState = [["Forrásazonosító", "Könyvelési dátum", "Összeg", "Deviza", "Feladó neve", "Feladó számlaszáma", "Eredeti közlemény", "Kinyert közleményjelöltek", "Párosított közlemény", "Státusz", "Feldolgozva"]];
 const paymentPendingState = [["Forrásazonosító", "Könyvelési dátum", "Összeg", "Deviza", "Feladó neve", "Feladó számlaszáma", "Eredeti közlemény", "Javaslatok", "Kézzel hozzárendelt közlemény", "Státusz", "Feldolgozva"]];
@@ -65,7 +65,9 @@ const emailOutputState = [[...EMAIL_OUTPUT_HEADERS]];
 const emailEventLogState = [[...EMAIL_EVENT_LOG_HEADERS]];
 const emailSettingsState = emailSettingsSheetRows();
 let masterColumnCount = 44;
+let staffColumnCount = 9;
 let nextTemplateId = 101;
+let emailStatusFormatRequest = null;
 for (const row of emailSettingsState) {
   if (String(row[0] || "").startsWith("TEMPLATE_")) row[1] = nextTemplateId++;
 }
@@ -103,8 +105,13 @@ globalThis.fetch = async (input, options = {}) => {
   if (url.includes("test-staff-spreadsheet:batchUpdate")) {
     const body = JSON.parse(options.body);
     for (const request of body.requests) {
-      const range = request.deleteDimension.range;
-      staffState.splice(range.startIndex, range.endIndex - range.startIndex);
+      if (request.deleteDimension) {
+        const range = request.deleteDimension.range;
+        staffState.splice(range.startIndex, range.endIndex - range.startIndex);
+      }
+      if (request.appendDimension?.dimension === "COLUMNS") {
+        staffColumnCount += request.appendDimension.length;
+      }
     }
     return new Response(JSON.stringify({ replies: [] }), { status: 200 });
   }
@@ -114,11 +121,14 @@ globalThis.fetch = async (input, options = {}) => {
       if (request.appendDimension?.sheetId === 1 && request.appendDimension.dimension === "COLUMNS") {
         masterColumnCount += request.appendDimension.length;
       }
+      if (request.addConditionalFormatRule || request.updateConditionalFormatRule) {
+        emailStatusFormatRequest = request;
+      }
     }
     return new Response(JSON.stringify({ replies: [] }), { status: 200 });
   }
   if (url.includes("test-staff-spreadsheet?fields=")) {
-    return new Response(JSON.stringify({ sheets: [{ properties: { sheetId: 42, title: "TAGOK 2026-27" } }] }), { status: 200 });
+    return new Response(JSON.stringify({ sheets: [{ properties: { sheetId: 42, title: "TAGOK 2026-27", gridProperties: { columnCount: staffColumnCount } } }] }), { status: 200 });
   }
   if (url.includes("test-spreadsheet?fields=")) {
     return new Response(JSON.stringify({ sheets: [
@@ -200,6 +210,10 @@ try {
   }), env);
   assert.equal(setup.status, 200);
   assert.equal(masterColumnCount, 46);
+  assert.equal(
+    emailStatusFormatRequest.addConditionalFormatRule.rule.booleanRule.condition.values[0].userEnteredValue,
+    '=OR($S2=TRUE,$M2="KÉZBESÍTVE",$M2="ELKÜLDVE")',
+  );
 
   const unauthorized = await worker.fetch(new Request("https://example.test/import/wrong"), env);
   assert.equal(unauthorized.status, 404);
@@ -257,6 +271,13 @@ try {
   assert.equal(sheetState[2][33], "2026-09-18");
   assert.equal(staffState[2][0], "TEST-WEBHOOK-001");
 
+  sheetState[1][10] = "2026-09-11";
+  sheetState[1][27] = "2027-02-06";
+  sheetState[1][12] = "Első óra után telefonos egyeztetés kell.";
+  staffState[1][8] = "Kézi belső megjegyzés";
+  staffState[1][9] = "RÉGI ELSŐ FÉLÉV";
+  staffState[1][10] = "RÉGI MÁSODIK FÉLÉV";
+  staffState[1][11] = "RÉGI EGYÉB MEGJEGYZÉS";
   staffState.push(["ORPHAN-ROW", "Törölt", "", "", "", "", "", ""]);
   const sync = await worker.fetch(new Request("https://example.test/sync/test-sync-token", {
     method: "POST",
@@ -268,6 +289,14 @@ try {
     status: "ok", pipeline_id: pipeline.pipeline_id, created: 0, updated: 2, deleted: 1, total: 2,
   });
   assert.equal(staffState.some((row) => row[0] === "ORPHAN-ROW"), false);
+  assert.equal(staffColumnCount, 12);
+  assert.equal(staffState[0][9], "I. féléves tandíjfizetés dátuma");
+  assert.equal(staffState[0][10], "II. féléves tandíjfizetés dátuma");
+  assert.equal(staffState[0][11], "Egyéb megjegyzés");
+  assert.equal(staffState[1][8], "Kézi belső megjegyzés");
+  assert.equal(staffState[1][9], "2026-09-11");
+  assert.equal(staffState[1][10], "2027-02-06");
+  assert.equal(staffState[1][11], "Első óra után telefonos egyeztetés kell.");
 
   sheetState.push(paymentMasterRow("9000001", "Kiss Beáta", "Kiss Júlia"));
   sheetState.push(paymentMasterRow("9000002", "Nagy Bence", "Nagy Béla"));
@@ -332,6 +361,24 @@ try {
   assert.equal(readyEmail[12], "KÜLDHETŐ");
   assert.equal(emailOutputState.filter((row) => row[1] === "LEGACY-MANUAL-001").length, 1);
   assert.equal(legacyManualRow[18], true);
+
+  const legacyDraftRow = Array.from({ length: 34 }, () => "");
+  legacyDraftRow[0] = "LEGACY-DRAFT-001|ENROLLMENT|1|2026-08-03-v1-draft";
+  legacyDraftRow[1] = "LEGACY-DRAFT-001";
+  legacyDraftRow[2] = "1";
+  legacyDraftRow[3] = "2026-08-03-v1-draft";
+  legacyDraftRow[12] = "KÜLDHETŐ";
+  emailOutputState.push(legacyDraftRow);
+  const legacyDraftMasterRow = [...readyRow];
+  legacyDraftMasterRow[0] = "LEGACY-DRAFT-001";
+  legacyDraftMasterRow[8] = "nem";
+  sheetState.push(legacyDraftMasterRow);
+  const refreshedLegacyDraft = await worker.fetch(new Request("https://example.test/emails/drafts/test-email-token", {
+    method: "POST", body: JSON.stringify({ pipeline_id: pipeline.pipeline_id }),
+  }), env);
+  assert.equal(refreshedLegacyDraft.status, 200);
+  assert.equal(emailOutputState.filter((row) => row[1] === "LEGACY-DRAFT-001").length, 1);
+  assert.equal(legacyDraftRow[0], `LEGACY-DRAFT-001|ENROLLMENT|1|${TEMPLATE_VERSION}`);
   readyEmail[12] = "ELKÜLDVE";
   readyEmail[13] = "MANUÁLIS";
   readyEmail[18] = true;

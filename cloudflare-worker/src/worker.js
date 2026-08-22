@@ -34,6 +34,12 @@ const CONTACT_FIRST_NAME_COLUMN = "AS";
 const STUDENT_FIRST_NAME_COLUMN = "AT";
 const BREVO_SEND_URL = "https://api.brevo.com/v3/smtp/email";
 const BREVO_TEMPLATE_URL = "https://api.brevo.com/v3/smtp/templates";
+const STAFF_BASE_SYNC_COLUMN_COUNT = 8;
+const STAFF_ADDITIONAL_SYNC_HEADERS = [
+  "I. féléves tandíjfizetés dátuma",
+  "II. féléves tandíjfizetés dátuma",
+  "Egyéb megjegyzés",
+];
 const inFlightSends = new Set();
 
 const EMAIL_COLUMN = Object.freeze({
@@ -813,16 +819,32 @@ function findStaffRow(rows, entryId) {
 }
 
 async function syncStaffTarget(accessToken, pipeline) {
-  const masterRows = await readSheetRows(accessToken, pipeline.spreadsheet_id, pipeline.tab_name, "A:AA");
+  const masterRows = await readSheetRows(accessToken, pipeline.spreadsheet_id, pipeline.tab_name, "A:ZZ");
   if (text(masterRows[0]?.[0]) !== "Közlemény") {
     throw new Error("A fő Sheet első oszlopának Közleménynek kell lennie.");
   }
+  const additionalSyncColumns = requiredHeaderIndexes(
+    masterRows[0],
+    STAFF_ADDITIONAL_SYNC_HEADERS,
+    "fő Sheet",
+  );
 
   const registrations = masterRows.slice(1)
     .filter((row) => text(row[0]) && text(row[5]))
-    .map((row) => ({ entryId: text(row[0]), studentName: text(row[5]), submittedAt: text(row[6]), row: row.slice(1, 27) }));
+    .map((row) => ({
+      entryId: text(row[0]),
+      studentName: text(row[5]),
+      submittedAt: text(row[6]),
+      row: row.slice(1),
+      additionalSyncValues: additionalSyncColumns.map((columnIndex) => text(row[columnIndex])),
+    }));
   const target = pipeline.staff_target;
-  const staffRows = await readSheetRows(accessToken, target.spreadsheet_id, target.tab_name, "A:H");
+  const staffRows = await readSheetRows(accessToken, target.spreadsheet_id, target.tab_name, "A:ZZ");
+  const staffAdditionalSyncColumns = await ensureStaffAdditionalSyncColumns(
+    accessToken,
+    target,
+    staffRows,
+  );
   const masterIds = new Set(registrations.map((registration) => registration.entryId));
   const mutableRows = staffRows.map((row) => [...row]);
   const data = [];
@@ -835,6 +857,12 @@ async function syncStaffTarget(accessToken, pipeline) {
     while (mutableRows.length < rowIndex) mutableRows.push([]);
     mutableRows[rowIndex - 1] = staffRowFromRegistration(registration);
     data.push({ range: `${quoteSheetName(target.tab_name)}!A${rowIndex}:H${rowIndex}`, values: [mutableRows[rowIndex - 1]] });
+    staffAdditionalSyncColumns.forEach((columnIndex, valueIndex) => {
+      data.push({
+        range: `${quoteSheetName(target.tab_name)}!${columnLetter(columnIndex)}${rowIndex}`,
+        values: [[registration.additionalSyncValues[valueIndex]]],
+      });
+    });
     if (existingIndex >= 0) updated += 1;
     else created += 1;
   }
@@ -855,6 +883,66 @@ async function syncStaffTarget(accessToken, pipeline) {
   if (deleteRows.length) await deleteRowsByIndex(accessToken, target, deleteRows);
 
   return { created, updated, deleted: deleteRows.length, total: registrations.length };
+}
+
+function requiredHeaderIndexes(header, names, sheetDescription) {
+  const indexes = names.map((name) => headerIndex(header, name));
+  const missing = names.filter((_name, index) => indexes[index] < 0);
+  if (missing.length) {
+    throw new Error(`Hiányzó kötelező ${sheetDescription} fejléc: ${missing.join(", ")}.`);
+  }
+  return indexes;
+}
+
+function headerIndex(header, name) {
+  const expected = normalizeHeader(name);
+  return header.findIndex((value) => normalizeHeader(value) === expected);
+}
+
+async function ensureStaffAdditionalSyncColumns(accessToken, target, staffRows) {
+  const header = [...(staffRows[0] || [])];
+  const addedColumns = [];
+  const indexes = STAFF_ADDITIONAL_SYNC_HEADERS.map((name) => {
+    const existingIndex = headerIndex(header, name);
+    if (existingIndex >= 0) return existingIndex;
+
+    const newIndex = Math.max(header.length, STAFF_BASE_SYNC_COLUMN_COUNT);
+    header[newIndex] = name;
+    addedColumns.push({ name, index: newIndex });
+    return newIndex;
+  });
+
+  if (!addedColumns.length) return indexes;
+
+  await ensureSheetColumnCapacity(accessToken, target, header.length);
+  await writeSheetRanges(accessToken, target.spreadsheet_id, addedColumns.map(({ name, index }) => ({
+    range: `${quoteSheetName(target.tab_name)}!${columnLetter(index)}1`,
+    values: [[name]],
+  })));
+  return indexes;
+}
+
+async function ensureSheetColumnCapacity(accessToken, target, requiredColumnCount) {
+  const metadata = await getSpreadsheetMetadata(accessToken, target.spreadsheet_id);
+  const sheet = (metadata.sheets || []).find((item) => item.properties?.title === target.tab_name);
+  if (!sheet) throw new Error(`Nem található fül: ${target.tab_name}`);
+
+  const currentColumnCount = sheet.properties?.gridProperties?.columnCount || 0;
+  if (currentColumnCount >= requiredColumnCount) return;
+
+  const baseUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(target.spreadsheet_id)}`;
+  await googleFetch(`${baseUrl}:batchUpdate`, accessToken, {
+    method: "POST",
+    body: JSON.stringify({
+      requests: [{
+        appendDimension: {
+          sheetId: sheet.properties.sheetId,
+          dimension: "COLUMNS",
+          length: requiredColumnCount - currentColumnCount,
+        },
+      }],
+    }),
+  });
 }
 
 async function ensureEmailInfrastructure(accessToken, pipeline) {
@@ -906,7 +994,44 @@ async function ensureEmailInfrastructure(accessToken, pipeline) {
     writes.push({ range: `${quoteSheetName(EMAIL_SETTINGS_TAB)}!A1:H${defaults.length}`, values: defaults });
   }
   await writeSheetRanges(accessToken, pipeline.spreadsheet_id, writes);
+  await ensureEmailOutputStatusFormatting(accessToken, pipeline.spreadsheet_id, metadata);
   return { created_tabs: missing, output_columns: EMAIL_OUTPUT_HEADERS.length, settings_initialized: !settingsRows.length };
+}
+
+async function ensureEmailOutputStatusFormatting(accessToken, spreadsheetId, metadata) {
+  const emailSheet = (metadata.sheets || []).find((sheet) => sheet.properties?.title === EMAIL_OUTPUT_TAB);
+  if (!emailSheet) return;
+
+  const greenFormat = {
+    backgroundColor: { red: 0.8509804, green: 0.9411765, blue: 0.827451 },
+    backgroundColorStyle: { rgbColor: { red: 0.8509804, green: 0.9411765, blue: 0.827451 } },
+  };
+  const statusFormula = 'OR($S2=TRUE,$M2="KÉZBESÍTVE",$M2="ELKÜLDVE")';
+  const existingRules = emailSheet.conditionalFormats || [];
+  const ruleIndex = existingRules.findIndex((rule) =>
+    rule.booleanRule?.condition?.type === "CUSTOM_FORMULA"
+    && rule.booleanRule.condition.values?.some((value) => text(value.userEnteredValue).includes("$S2=TRUE")),
+  );
+  const baseUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}`;
+  const rule = {
+    ranges: [{
+      sheetId: emailSheet.properties.sheetId,
+      startRowIndex: 1,
+      startColumnIndex: 0,
+      endColumnIndex: EMAIL_OUTPUT_HEADERS.length,
+    }],
+    booleanRule: {
+      condition: { type: "CUSTOM_FORMULA", values: [{ userEnteredValue: `=${statusFormula}` }] },
+      format: ruleIndex >= 0 ? existingRules[ruleIndex].booleanRule?.format || greenFormat : greenFormat,
+    },
+  };
+  const request = ruleIndex >= 0
+    ? { updateConditionalFormatRule: { sheetId: emailSheet.properties.sheetId, index: ruleIndex, rule } }
+    : { addConditionalFormatRule: { index: 0, rule } };
+  await googleFetch(`${baseUrl}:batchUpdate`, accessToken, {
+    method: "POST",
+    body: JSON.stringify({ requests: [request] }),
+  });
 }
 
 async function loadEmailSettings(accessToken, pipeline) {
@@ -1189,12 +1314,12 @@ function findExistingEmailRowIndex(rows, sendKey, entryId, eventType, periodKey)
   const exactIndex = rows.findIndex((emailRow, emailIndex) => emailIndex > 0 && text(emailRow[EMAIL_COLUMN.SEND_KEY]) === sendKey);
   if (exactIndex >= 0) return exactIndex;
 
-  // Before versioned Brevo templates, manually sent rows used a shorter key
-  // without an explicit event type. Treat a matching manual history row as
-  // authoritative so a template-version upgrade cannot create a duplicate.
+  // A template version change must refresh the existing draft, not append a
+  // second row for the same registration and email event. Manually sent rows
+  // remain authoritative too: refreshEmailDrafts will mark them as changed
+  // after send instead of replacing their sending history.
   return rows.findIndex((emailRow, emailIndex) => (
     emailIndex > 0
-    && isChecked(emailRow[EMAIL_COLUMN.MANUAL_SENT])
     && text(emailRow[EMAIL_COLUMN.ENTRY_ID]) === entryId
     && emailEventTypeFromRow(emailRow) === eventType
     && emailPeriodKeyFromRow(emailRow) === periodKey
@@ -1568,7 +1693,7 @@ async function appendSheetRows(accessToken, spreadsheetId, tabName, values) {
 
 async function getSpreadsheetMetadata(accessToken, spreadsheetId) {
   const baseUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}`;
-  return googleFetch(`${baseUrl}?fields=sheets.properties(sheetId,title,gridProperties(columnCount))`, accessToken);
+  return googleFetch(`${baseUrl}?fields=sheets(properties(sheetId,title,gridProperties(columnCount)),conditionalFormats)`, accessToken);
 }
 
 function spreadsheetColumnNumber(column) {

@@ -101,16 +101,21 @@ oszlopban tárolódik.
 ## Munkatársi Sheet szinkron
 
 A pipeline `staff_target` beállítása esetén a Worker minden új webhook- és
-CSV-rekordot a fő Sheet mellett a munkatársi Sheetbe is beír. A munkatársi
-Sheetben csak az `A:H` mezők szinkronizáltak; a további kézi, pénzügyi és
-megjegyzés-oszlopok érintetlenek maradnak.
+CSV-rekordot a fő Sheet mellett a munkatársi Sheetbe is beír. A teljes
+szinkron az `A:H` mezőkön felül az `I. féléves tandíjfizetés dátuma`, a
+`II. féléves tandíjfizetés dátuma` és az `Egyéb megjegyzés` mezőt is átviszi.
+Ha ezek még hiányoznak a munkatársi lap fejlécéből, létrehozza őket; a többi kézi, pénzügyi és
+megjegyzés-oszlop érintetlen marad.
 
 A fő Sheethez kötött Apps Script a `Budai Tánc → Munkatársi Sheet
 szinkronizálása` menüponttal indít teljes egyeztetést. A kód az
 `../apps-script/master-sheet-sync.gs` fájlban van. A token egyszeri megadása
 a Script Properties-ben történik. A szinkron fizikailag törli a munkatársi
 Sheetből azokat az azonosítóval ellátott sorokat, amelyek már nincsenek a fő
-Sheetben.
+Sheetben. Minden futáskor `Közlemény` azonosító alapján frissíti a már létező
+sorok mindkét fizetési dátumát és az `Egyéb megjegyzés` értékét is, ezért a
+jelentkezés után később rögzített befizetések is átkerülnek, új sor létrehozása
+nélkül.
 
 ## Befizetések érkeztetése
 
