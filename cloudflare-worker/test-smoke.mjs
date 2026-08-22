@@ -47,7 +47,7 @@ const env = {
 };
 
 const sheetState = [
-  ["Közlemény", "Tanfolyam neve", "Nap és terem", "Óra ideje", "Táncpedagógusok", "Jelentkező (növendék) neve", "Jelentkezés ideje", "Tanfolyamon részvétel kezdete / naptár", "Próbaórára jelentkezés", "I. féléves tandíj", "I. féléves tandíjfizetés dátuma", "I. tagsági kiállítva", "Egyéb megjegyzés", "Más óraszámban jár", "Születési dátum", "Lakcím", "Telefon", "E-mail cím", "Törvényes képviselő, szülő neve", "Kerület Kártya száma", "Kerület Kártya lejárati dátuma", "Kerület Kártya fotója", "Testvér neve", "Testvér csoportja", "Rendelkezik jóváírható összeggel", "Számlázási adatok", "Számlázási email", "II. féléves tandíjfizetés dátuma"],
+  ["Közlemény", "Tanfolyam neve", "Nap és terem", "Óra ideje", "Táncpedagógusok", "Jelentkező (növendék) neve", "Jelentkezés ideje", "Tanfolyamon részvétel kezdete / naptár", "Próbaórára jelentkezés", "I. féléves tandíj", "I. féléves tandíjfizetés dátuma", "I. tagsági kiállítva", "Egyéb megjegyzés", "Más óraszámban jár", "Születési dátum", "Lakcím", "Telefon", "E-mail cím", "Törvényes képviselő, szülő neve", "Kerület Kártya száma", "Kerület Kártya lejárati dátuma", "Kerület Kártya fotója", "Testvér neve", "Testvér csoportja", "Rendelkezik jóváírható összeggel", "Számlázási adatok", "Számlázási email", "II. féléves tandíj befizetés dátuma"],
 ];
 const staffState = [
   ["Közlemény", "Tanfolyam", "Nap és terem", "Óra ideje", "Táncpedagógusok", "Jelentkező (növendék) neve", "Jelentkezés ideje", "Tanfolyamon részvétel kezdete / naptár", "Belső megjegyzés"],
@@ -291,7 +291,7 @@ try {
   assert.equal(staffState.some((row) => row[0] === "ORPHAN-ROW"), false);
   assert.equal(staffColumnCount, 12);
   assert.equal(staffState[0][9], "I. féléves tandíjfizetés dátuma");
-  assert.equal(staffState[0][10], "II. féléves tandíjfizetés dátuma");
+  assert.equal(staffState[0][10], "II. féléves tandíj befizetés dátuma");
   assert.equal(staffState[0][11], "Egyéb megjegyzés");
   assert.equal(staffState[1][8], "Kézi belső megjegyzés");
   assert.equal(staffState[1][9], "2026-09-11");

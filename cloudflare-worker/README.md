@@ -103,7 +103,7 @@ oszlopban tárolódik.
 A pipeline `staff_target` beállítása esetén a Worker minden új webhook- és
 CSV-rekordot a fő Sheet mellett a munkatársi Sheetbe is beír. A teljes
 szinkron az `A:H` mezőkön felül az `I. féléves tandíjfizetés dátuma`, a
-`II. féléves tandíjfizetés dátuma` és az `Egyéb megjegyzés` mezőt is átviszi.
+`II. féléves tandíj befizetés dátuma` és az `Egyéb megjegyzés` mezőt is átviszi.
 Ha ezek még hiányoznak a munkatársi lap fejlécéből, létrehozza őket; a többi kézi, pénzügyi és
 megjegyzés-oszlop érintetlen marad.
 

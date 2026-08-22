@@ -37,7 +37,7 @@ const BREVO_TEMPLATE_URL = "https://api.brevo.com/v3/smtp/templates";
 const STAFF_BASE_SYNC_COLUMN_COUNT = 8;
 const STAFF_ADDITIONAL_SYNC_HEADERS = [
   "I. féléves tandíjfizetés dátuma",
-  "II. féléves tandíjfizetés dátuma",
+  "II. féléves tandíj befizetés dátuma",
   "Egyéb megjegyzés",
 ];
 const inFlightSends = new Set();
@@ -367,7 +367,7 @@ async function handleSync(request, env, token) {
     return json({ status: "ok", pipeline_id: pipeline.pipeline_id, ...result });
   } catch (error) {
     console.error("Staff Sheet sync failed", error);
-    return json({ error: "sync_failed" }, 500);
+    return json({ error: "sync_failed", message: error.message || "Ismeretlen hiba." }, 500);
   }
 }
 
