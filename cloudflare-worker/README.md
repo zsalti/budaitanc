@@ -48,9 +48,16 @@ accounttal közvetlenül hívja, nincs szükség Google Cloud Runra.
    npx wrangler secret put PAYMENTS_SOURCE_CONFIG_JSON
    ```
 
-   A `drive_file_id` mindig ugyanaz a Google Drive-fájl legyen. A friss banki
-   kivonatot ebbe a fájlba kell feltölteni/cserélni; így nem kell minden
-   érkeztetéskor konfigurációt módosítani. A fájlt oszd meg **olvasóként** a
+   Két forrásmód lehetséges:
+
+   - `drive_file_id` — mindig ugyanaz a Google Drive-fájl; a friss banki
+     kivonatot ebbe a fájlba kell feltölteni/cserélni.
+   - `drive_folder_id` — egy kijelölt Drive-mappa; a Worker a mappa
+     legfrissebb (`modifiedTime` szerinti) `.xlsx` fájlját tölti le, tehát a
+     kezelő egyszerűen bedobja az új exportot a mappába, nem kell fix fájlt
+     felülírni. Ha mindkét mező szerepel, a `drive_file_id` élvez elsőbbséget.
+
+   Mindkét esetben a fájlt (vagy a mappát) oszd meg **olvasóként** a
    `budaitancklub-reg@budaitancklub.iam.gserviceaccount.com` címmel, és a
    Google Cloud projektben a Google Drive API is legyen engedélyezve.
 
@@ -124,18 +131,36 @@ menüpont indítja a feldolgozást. Az első futás előtt a `Budai Tánc →
 Befizetési token beállítása` menüpontban egyszer meg kell adni a
 `PAYMENT_IMPORT_TOKEN` értékét.
 
-A Worker a megadott Drive-fájlból olvassa a banki `.xlsx`-et, majd:
+A Worker a megadott Drive-fájlból (vagy -mappa legfrissebb fájljából) olvassa
+a banki `.xlsx`-et, majd:
 
 - a közleményben levő pontos, 1–7 számjegyes `Közlemény` azonosítót
   automatikusan párosítja;
 - a fő Sheet `I. féléves tandíjfizetés dátuma` oszlopába csak üres fizetési dátum esetén ír (jelenleg K oszlop); a J oszlop az elvárt `I. féléves tandíj` összege;
 - minden beolvasott tételt a `Befizetések napló` fülön őriz meg;
-- a hibás, hiányzó vagy többértelmű közleményű tételeket a `Függő
-  befizetések` fülre teszi;
-- a függő fülben név alapján legfeljebb három javaslatot mutat. A név sosem
-  indít automatikus könyvelést;
+- ha a közlemény egy jóváhagyott (`Feldolgozható`) és egyértelmű
+  `Közlemény eltérések` korrekcióval egyezik, a **valódi** közleményhez
+  könyvel; a naplóban a párosított kód a valódi, a jelöltek oszlop az
+  eredetit is megőrzi, a státusz `Könyvelve javított közleménnyel`;
+- ha a közleményből több létező azonosító is kiolvasható (`Többértelmű`), és
+  a feladó vezetékneve pontosan egy jelölt növendékének/szülőjének nevével
+  egyezik, ahhoz könyvel, `Könyvelve névvel megerősítve` státusszal;
+- minden más hibás, hiányzó, korrekció nélküli vagy továbbra is
+  többértelmű tételt a `Függő befizetések` fülre tesz, a javaslatok mezőben a
+  könyvelési dátummal kiegészítve;
 - a `Kézzel hozzárendelt közlemény` oszlopba írt érvényes azonosítót a
   következő futáskor könyveli le.
+
+**Inkrementális import.** A banki export mindig kumulatív (a korábbi sorokat
+is tartalmazza). A `Befizetés import állapot` fül egysoros vízjelet tart
+(utolsó importált sorszám, az utolsó 1–2 sor ujjlenyomata). Ha az új fájl
+teteje pontosan illeszkedik az előzőhöz (append-only), a Worker csak a
+korábbinál későbbi sorokat dolgozza fel — ez azt is jelenti, hogy egy
+tranzakcióazonosító nélküli, de tartalmilag a korábbival véletlenül azonos
+**új** sor sem vész el (pozíció alapján, nem tartalmi ujjlenyomat alapján dönt
+újdonságról). Ha a fájl eleje nem egyezik (átrendezve/szerkesztve), a Worker
+visszaáll a teljes, `Befizetések napló`-alapú tartalom-ujjlenyomat dedupra —
+ez a `Befizetések feldolgozva` visszajelzésben `state_reset` jelzést kap.
 
 A banki fájl tényleges fejlécét a `payments-source.json.example` `columns`
 leképezésében lehet hozzáigazítani. A repositoryban levő
@@ -185,10 +210,14 @@ esethez megjelenik a hibásan kiküldött közlemény, a levél címzettje és �
 e-mail cím a `TAGOK I FÉLÉV` forrásban pontosan egy rekordhoz tartozik — a
 címzett valódi közleménye.
 
-Az `Feldolgozható` jelölőt csak emberi ellenőrzés után szabad bejelölni. Ez a
-lista jelenleg még nem könyvel automatikusan banki tételt; a későbbi
-banki-párosítási szabály kizárólag az így jóváhagyott, egyértelmű megfeleltetéseket
-használhatja.
+Az `Feldolgozható` jelölőt csak emberi ellenőrzés után szabad bejelölni. A
+banki befizetés-import ezt a listát olvassa: ha egy adott hibás közleményhez
+pontosan egy jóváhagyott, létező regisztrációra mutató valódi közlemény
+tartozik, az importer automatikusan a valódihoz könyvel (`Könyvelve javított
+közleménnyel` státusz). Ha ugyanahhoz a hibás kódhoz több jóváhagyott valódi
+közlemény is tartozik, vagy a sor nincs `Feldolgozható`-ra jelölve, az
+importer nem könyvel automatikusan — a tétel a `Függő befizetések` fülre
+kerül.
 
 Az Apps Script első használatakor a `Budai Tánc → E-mail token beállítása`
 menüben az `EMAIL_ADMIN_TOKEN` értékét kell megadni. A `BREVO_API_KEY` nem

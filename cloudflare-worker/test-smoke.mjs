@@ -5,6 +5,7 @@ import worker, {
   CSV_HEADERS,
   EMAIL_EVENT_LOG_HEADERS,
   EMAIL_OUTPUT_HEADERS,
+  buildApprovedCorrections,
   emailRevisionHashFromRow,
   extractReferences,
   nameSuggestions,
@@ -21,6 +22,15 @@ const fixture = await fs.readFile(
 );
 const paymentFixture = await fs.readFile(
   new URL("./test-fixtures/minta-banki-kivonat.xlsx", import.meta.url),
+);
+const paymentFixtureRun1 = await fs.readFile(
+  new URL("./test-fixtures/minta-banki-kivonat-2-run1.xlsx", import.meta.url),
+);
+const paymentFixtureRun2 = await fs.readFile(
+  new URL("./test-fixtures/minta-banki-kivonat-2-run2.xlsx", import.meta.url),
+);
+const paymentFixtureRun3 = await fs.readFile(
+  new URL("./test-fixtures/minta-banki-kivonat-2-run3-reset.xlsx", import.meta.url),
 );
 
 const serviceAccount = await createTestServiceAccount();
@@ -54,7 +64,56 @@ const staffState = [
 ];
 const paymentLogState = [["Forrásazonosító", "Könyvelési dátum", "Összeg", "Deviza", "Feladó neve", "Feladó számlaszáma", "Eredeti közlemény", "Kinyert közleményjelöltek", "Párosított közlemény", "Státusz", "Feldolgozva"]];
 const paymentPendingState = [["Forrásazonosító", "Könyvelési dátum", "Összeg", "Deviza", "Feladó neve", "Feladó számlaszáma", "Eredeti közlemény", "Javaslatok", "Kézzel hozzárendelt közlemény", "Státusz", "Feldolgozva"]];
+const paymentStateState = [];
 const referenceCorrectionsState = [];
+
+// Elszigetelt második banki-import fixture-sorozat (kumulatív import,
+// vízjel-reset, jóváhagyott korrekció, névi megerősítés teszteléséhez).
+const PAYMENT_STATE_HEADERS_TEST = [
+  "Utolsó import ideje", "Fájl sorainak száma", "Feldolgozott új sorok",
+  "Utolsó tranzakcióazonosító", "Legkésőbbi könyvelési dátum", "Utolsó sorok ujjlenyomata",
+];
+const REFERENCE_CORRECTION_HEADERS_TEST = [
+  "Hibás közlemény", "Valódi közlemény", "Hibás levél címzettje", "Növendék", "Szülő / kapcsolattartó",
+  "Forrás sor", "E-mail kimenet sora", "Állapot", "Indok", "Feldolgozható", "Megjegyzés", "Frissítve",
+];
+const pipeline2 = {
+  pipeline_id: "tanctanfolyam_jelentkezes",
+  adapter: "dance_course_registration",
+  spreadsheet_id: "test-payments-spreadsheet-2",
+  tab_name: " TAGOK I FÉLÉV",
+  email_automation: false,
+};
+const sheetState2 = [
+  [...sheetState[0]],
+  paymentMasterRow2("5551", "Fehér Dóra", "Fehér Katalin"),
+  paymentMasterRow2("5552", "Duplikátum Teszt", "Duplikátum Szülő"),
+  paymentMasterRow2("5553", "Palkó Réka", "Palkó Anna"),
+  paymentMasterRow2("5554", "Szabó Márk", "Szabó Éva"),
+  paymentMasterRow2("5556", "Varga Léna", "Nagy Ilona"),
+  paymentMasterRow2("5557", "Kovács Bendegúz", "Kovács Réka"),
+  paymentMasterRow2("5558", "Tóth Ambrus", "Tóth Béla"),
+  paymentMasterRow2("5559", "Kis Eszter", "Kis Anna"),
+];
+const paymentLogState2 = [[...paymentLogState[0]]];
+const paymentPendingState2 = [[...paymentPendingState[0]]];
+const paymentStateState2 = [];
+const referenceCorrectionsState2 = [
+  [...REFERENCE_CORRECTION_HEADERS_TEST],
+  ["8888", "5554", "", "", "", "", "", "JAVASOLT", "", true, "", ""],
+  ["7777", "5551", "", "", "", "", "", "JAVASOLT", "", false, "", ""],
+  ["6666", "5551", "", "", "", "", "", "JAVASOLT", "", true, "", ""],
+  ["6666", "5552", "", "", "", "", "", "JAVASOLT", "", true, "", ""],
+];
+let masterColumnCount2 = 44;
+const driveFileContents = new Map([
+  ["test-payment-file", paymentFixture],
+  ["folder-file-new", paymentFixtureRun1],
+  ["folder-file-old", paymentFixture],
+  ["test-payment-file-2", paymentFixtureRun1],
+]);
+const driveMediaFetches = [];
+const driveFolderListRequests = [];
 const automationConfigState = [[
   "Tanfolyam kulcs", "GF pontos érték / alias", "Nap", "Kezdés", "Befejezés", "Helyszín", "Tanár", "Heti alkalom", "Perc/alkalom", "Díjkategória", "Kézi elbírálás",
   "", "Félév", "Sáv kezdete", "Sáv vége", "Díjkategória", "Alapár", "Kedvezményes ár", "", "Tanfolyam kulcs", "Dátum", "Típus", "Kezdés", "Befejezés", "Helyszín",
@@ -104,6 +163,13 @@ globalThis.fetch = async (input, options = {}) => {
     for (const item of body.data) applyRange(item.range, item.values[0], stateForRange(item.range, url));
     return new Response(JSON.stringify({ totalUpdatedCells: body.data.length }), { status: 200 });
   }
+  if (url.includes("test-payments-spreadsheet-2:batchUpdate")) {
+    const body = JSON.parse(options.body);
+    for (const request of body.requests) {
+      if (request.appendDimension?.dimension === "COLUMNS") masterColumnCount2 += request.appendDimension.length;
+    }
+    return new Response(JSON.stringify({ replies: [] }), { status: 200 });
+  }
   if (url.includes("test-staff-spreadsheet:batchUpdate")) {
     const body = JSON.parse(options.body);
     for (const request of body.requests) {
@@ -135,6 +201,15 @@ globalThis.fetch = async (input, options = {}) => {
   if (url.includes("test-staff-spreadsheet?fields=")) {
     return new Response(JSON.stringify({ sheets: [{ properties: { sheetId: 42, title: "TAGOK 2026-27", gridProperties: { columnCount: staffColumnCount } } }] }), { status: 200 });
   }
+  if (url.includes("test-payments-spreadsheet-2?fields=")) {
+    return new Response(JSON.stringify({ sheets: [
+      { properties: { sheetId: 20, title: " TAGOK I FÉLÉV", gridProperties: { columnCount: masterColumnCount2 } } },
+      { properties: { sheetId: 21, title: "Befizetések napló" } },
+      { properties: { sheetId: 22, title: "Függő befizetések" } },
+      { properties: { sheetId: 23, title: "Befizetés import állapot" } },
+      { properties: { sheetId: 24, title: "Közlemény eltérések" } },
+    ] }), { status: 200 });
+  }
   if (url.includes("test-spreadsheet?fields=")) {
     return new Response(JSON.stringify({ sheets: [
       { properties: { sheetId: 1, title: " TAGOK I FÉLÉV", gridProperties: { columnCount: masterColumnCount } } },
@@ -144,6 +219,7 @@ globalThis.fetch = async (input, options = {}) => {
       { properties: { sheetId: 5, title: "E-mail kimenet" } },
       { properties: { sheetId: 6, title: "E-mail beállítások" } },
       { properties: { sheetId: 7, title: "E-mail eseménynapló" } },
+      { properties: { sheetId: 9, title: "Befizetés import állapot" } },
       ...(hasReferenceCorrectionsSheet ? [{ properties: { sheetId: 8, title: "Közlemény eltérések" } }] : []),
     ] }), { status: 200 });
   }
@@ -153,11 +229,24 @@ globalThis.fetch = async (input, options = {}) => {
     stateForRange(range, url).push(...body.values);
     return new Response(JSON.stringify({ updates: { updatedRows: body.values.length } }), { status: 200 });
   }
-  if (url.includes("www.googleapis.com/drive/v3/files/test-payment-file?alt=media")) {
-    return new Response(paymentFixture, { status: 200 });
+  if (url.includes("www.googleapis.com/drive/v3/files?q=")) {
+    driveFolderListRequests.push(url);
+    return new Response(JSON.stringify({ files: [
+      { id: "folder-file-new", name: "minta-banki-kivonat-2-run1.xlsx", modifiedTime: "2026-08-20T00:00:00.000Z" },
+      { id: "folder-file-old", name: "minta-banki-kivonat.xlsx", modifiedTime: "2026-01-01T00:00:00.000Z" },
+    ] }), { status: 200 });
+  }
+  const driveMediaMatch = url.match(/drive\/v3\/files\/([^/?]+)\?alt=media/);
+  if (driveMediaMatch) {
+    const fileId = decodeURIComponent(driveMediaMatch[1]);
+    driveMediaFetches.push(fileId);
+    const content = driveFileContents.get(fileId);
+    return content ? new Response(content, { status: 200 }) : new Response("", { status: 404 });
   }
   if (url.includes("/values/")) {
-    return new Response(JSON.stringify({ values: stateForRange(decodedUrl, url) }), { status: 200 });
+    const rangePart = decodedUrl.split("/values/")[1];
+    const rows = stateForRange(decodedUrl, url);
+    return new Response(JSON.stringify({ values: sliceRangeRows(rangePart, rows) }), { status: 200 });
   }
   return originalFetch(input, options);
 };
@@ -199,6 +288,21 @@ try {
   const payment = await paymentFromRow(paymentRows[0], {}, 2);
   assert.equal(payment.sourceKey, "id:TX-2026-0001");
   assert.deepEqual(extractReferences("Tandíj 9000001 / 9000002, 12345678"), ["9000001", "9000002"]);
+  assert.ok(extractReferences("budai táncklub tandíj 1234 18000Ft 2026-08-10").includes("1234"));
+
+  assert.deepEqual(
+    [...buildApprovedCorrections(
+      [
+        ["Hibás közlemény", "Valódi közlemény"],
+        ["1111", "2222", "", "", "", "", "", "", "", true],
+        ["3333", "4444", "", "", "", "", "", "", "", true],
+        ["3333", "5555", "", "", "", "", "", "", "", true],
+        ["6666", "7777", "", "", "", "", "", "", "", false],
+      ],
+      new Map([["2222", {}], ["4444", {}], ["5555", {}], ["7777", {}]]),
+    ).entries()],
+    [["1111", "2222"]],
+  );
   assert.deepEqual(nameSuggestions("KISS Júlia", [
     { reference: "9000001", studentName: "Kiss Beáta", parentName: "Nagy Márta" },
     { reference: "9000002", studentName: "Kovács Lili", parentName: "Kiss János" },
@@ -318,7 +422,8 @@ try {
   }), paymentAutomationEnv);
   assert.equal(paymentImport.status, 200);
   assert.deepEqual(await paymentImport.json(), {
-    status: "ok", pipeline_id: pipeline.pipeline_id, new_transactions: 5, booked: 2, already_recorded: 0, pending: 3, duplicates: 0, manually_resolved: 0, payment_email_drafts: 2,
+    status: "ok", pipeline_id: pipeline.pipeline_id, new_transactions: 5, booked: 2, already_recorded: 0, pending: 3, duplicates: 0, manually_resolved: 0,
+    corrected_booked: 0, name_confirmed: 0, total_rows: 5, new_rows: 5, skipped_by_watermark: 0, state_reset: false, payment_email_drafts: 2,
   });
   assert.equal(sheetState.find((row) => row[0] === "9000001")[10], "2026-08-10");
   assert.equal(paymentLogState.length, 6);
@@ -335,6 +440,103 @@ try {
   assert.equal((await manualResolution.json()).manually_resolved, 1);
   assert.equal(paymentPendingState[1][9], "Könyvelve kézzel");
   assert.equal(emailOutputState.filter((row) => row[21] === "PAYMENT_RECEIVED").length, 2);
+
+  // Elszigetelt második banki-import sorozat: Drive-mappa forrás, kumulatív
+  // vízjel-alapú inkrementális import, vízjel-reset, jóváhagyott korrekció és
+  // névi megerősítés végponttól-végpontig.
+  const folderPaymentEnv = {
+    ...env,
+    PIPELINES_CONFIG_JSON: JSON.stringify({ pipelines: [pipeline2] }),
+    PAYMENT_IMPORT_TOKEN: "test-payment-token-2",
+    PAYMENTS_SOURCE_CONFIG_JSON: JSON.stringify({ pipeline_id: pipeline2.pipeline_id, drive_folder_id: "test-folder-id", sheet_name: "Kivonat" }),
+  };
+  const directPaymentEnv2 = {
+    ...env,
+    PIPELINES_CONFIG_JSON: JSON.stringify({ pipelines: [pipeline2] }),
+    PAYMENT_IMPORT_TOKEN: "test-payment-token-2",
+    PAYMENTS_SOURCE_CONFIG_JSON: JSON.stringify({ pipeline_id: pipeline2.pipeline_id, drive_file_id: "test-payment-file-2", sheet_name: "Kivonat" }),
+  };
+
+  // 0. Mappa-forrás: a Drive files.list mockja két XLSX-et ad vissza eltérő
+  // modifiedTime-mal — a Worker a legfrissebbet tölti le. Ez egyben a
+  // sorozat első (kumulatív alap-) importja is.
+  const run1Import = await worker.fetch(new Request("https://example.test/payments/test-payment-token-2", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pipeline_id: pipeline2.pipeline_id }),
+  }), folderPaymentEnv);
+  assert.equal(run1Import.status, 200);
+  assert.ok(driveFolderListRequests.some((requestUrl) => requestUrl.includes("test-folder-id")));
+  assert.equal(driveMediaFetches.at(-1), "folder-file-new");
+  const run1Result = await run1Import.json();
+  assert.deepEqual(run1Result, {
+    status: "ok", pipeline_id: pipeline2.pipeline_id, new_transactions: 4, booked: 2, already_recorded: 0, pending: 2, duplicates: 0, manually_resolved: 0,
+    corrected_booked: 0, name_confirmed: 0, total_rows: 4, new_rows: 4, skipped_by_watermark: 0, state_reset: false, payment_email_drafts: 0,
+  });
+  assert.equal(sheetState2.find((row) => row[0] === "5551")[10], "2026-08-01");
+  assert.equal(sheetState2.find((row) => row[0] === "5552")[10], "2026-08-02");
+  assert.equal(paymentStateState2[1]?.[1], 4);
+
+  // 1. Inkrementális import: kumulatív fájl (a 4 régi + 6 új sor) — a
+  // második futásnál a régiek `duplicates`-ként a vízjel miatt azonnal
+  // kimaradnak, csak az új sorok futnak le ténylegesen (`new_rows`).
+  // Emellett teszteli a 2., 3. és 6. pontot is: tranzakció-ID nélküli, a
+  // korábbival tartalmilag azonos, valóban új sor nem vész el; a
+  // jóváhagyott korrekció automatikusan könyvel; a névvel megerősített
+  // egyértelmű találat is könyvel.
+  driveFileContents.set("test-payment-file-2", paymentFixtureRun2);
+  const run2Import = await worker.fetch(new Request("https://example.test/payments/test-payment-token-2", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pipeline_id: pipeline2.pipeline_id }),
+  }), directPaymentEnv2);
+  assert.equal(run2Import.status, 200);
+  const run2Result = await run2Import.json();
+  assert.deepEqual(run2Result, {
+    status: "ok", pipeline_id: pipeline2.pipeline_id, new_transactions: 6, booked: 2, already_recorded: 1, pending: 3, duplicates: 4, manually_resolved: 0,
+    corrected_booked: 1, name_confirmed: 1, total_rows: 10, new_rows: 6, skipped_by_watermark: 4, state_reset: false, payment_email_drafts: 0,
+  });
+  assert.equal(sheetState2.find((row) => row[0] === "5554")[10], "2026-08-16");
+  assert.equal(sheetState2.find((row) => row[0] === "5556")[10], "2026-08-19");
+  assert.equal(
+    paymentLogState2.some((row) => row[6] === "Hivatkozás 8888" && row[8] === "5554" && row[9] === "Könyvelve javított közleménnyel"),
+    true,
+  );
+  assert.equal(
+    paymentLogState2.some((row) => row[6] === "Hivatkozás 7777" && row[9] === "Függő"),
+    true,
+  );
+  assert.equal(
+    paymentLogState2.some((row) => row[6] === "Hivatkozás 6666" && row[9] === "Függő"),
+    true,
+  );
+  assert.equal(
+    paymentLogState2.some((row) => row[6] === "5556 / 5557" && row[8] === "5556" && row[9] === "Könyvelve névvel megerősítve"),
+    true,
+  );
+  assert.equal(
+    paymentLogState2.some((row) => row[6] === "5558 / 5559" && row[9] === "Többértelmű"),
+    true,
+  );
+  const duplicateContentLogRows = paymentLogState2.filter((row) => row[4] === "Duplikátum Küldő");
+  assert.equal(duplicateContentLogRows.length, 2, "a két azonos tartalmú, tranzakció-ID nélküli sor mindegyike bekerül a naplóba");
+  assert.equal(duplicateContentLogRows[1][9], "Már rögzített");
+  assert.equal(paymentStateState2[1]?.[1], 10);
+
+  // 2. Vízjel-reset: a fájl utolsó sora megváltozott (átrendezve/szerkesztve)
+  // → a vízjel-ellenőrzés bukik, fallback a teljes dedupra, nincs dupla
+  // könyvelés.
+  driveFileContents.set("test-payment-file-2", paymentFixtureRun3);
+  const run3Import = await worker.fetch(new Request("https://example.test/payments/test-payment-token-2", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pipeline_id: pipeline2.pipeline_id }),
+  }), directPaymentEnv2);
+  assert.equal(run3Import.status, 200);
+  const run3Result = await run3Import.json();
+  assert.deepEqual(run3Result, {
+    status: "ok", pipeline_id: pipeline2.pipeline_id, new_transactions: 1, booked: 0, already_recorded: 0, pending: 1, duplicates: 9, manually_resolved: 0,
+    corrected_booked: 0, name_confirmed: 0, total_rows: 10, new_rows: 1, skipped_by_watermark: 0, state_reset: true, payment_email_drafts: 0,
+  });
+  assert.equal(sheetState2.find((row) => row[0] === "5551")[10], "2026-08-01");
+  assert.equal(sheetState2.find((row) => row[0] === "5556")[10], "2026-08-19");
 
   const readyRow = Array.from({ length: 46 }, () => "");
   readyRow[0] = "TEST-EMAIL-001";
@@ -534,12 +736,20 @@ function applyRange(range, values, state) {
 
 function stateForRange(range, url = "") {
   const value = decodeURIComponent(range);
+  if (url.includes("test-payments-spreadsheet-2")) {
+    if (value.includes("Befizetések napló")) return paymentLogState2;
+    if (value.includes("Függő befizetések")) return paymentPendingState2;
+    if (value.includes("Befizetés import állapot")) return paymentStateState2;
+    if (value.includes("Közlemény eltérések")) return referenceCorrectionsState2;
+    return sheetState2;
+  }
   if (value.includes("Automata kalk")) return automationConfigState;
   if (value.includes("E-mail kimenet")) return emailOutputState;
   if (value.includes("E-mail beállítások")) return emailSettingsState;
   if (value.includes("E-mail eseménynapló")) return emailEventLogState;
   if (value.includes("Befizetések napló")) return paymentLogState;
   if (value.includes("Függő befizetések")) return paymentPendingState;
+  if (value.includes("Befizetés import állapot")) return paymentStateState;
   if (value.includes("Közlemény eltérések")) return referenceCorrectionsState;
   return url.includes("test-staff-spreadsheet") ? staffState : sheetState;
 }
@@ -553,6 +763,18 @@ function paymentMasterRow(reference, studentName, parentName) {
   row[17] = `${reference}@example.invalid`;
   row[18] = parentName;
   return row;
+}
+
+function paymentMasterRow2(reference, studentName, parentName) {
+  return paymentMasterRow(reference, studentName, parentName);
+}
+
+function sliceRangeRows(range, rows) {
+  const match = String(range).match(/![A-Za-z]*(\d*)(?::[A-Za-z]*(\d*))?$/);
+  if (!match) return rows;
+  const startRow = match[1] ? Number(match[1]) : 1;
+  const endRow = match[2] ? Number(match[2]) : (match[1] ? Number(match[1]) : rows.length);
+  return rows.slice(startRow - 1, endRow);
 }
 
 function columnNumber(column) {

@@ -231,8 +231,8 @@ async function handlePaymentsImport(request, env, token) {
     const pipeline = getPipeline(env, text(payload.pipeline_id) || defaultPipelineId(env));
     const source = getPaymentSource(env, pipeline.pipeline_id);
     const accessToken = await getGoogleAccessToken(env.GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT);
-    const transactions = await downloadPaymentTransactions(accessToken, source);
-    const result = await importPayments(accessToken, pipeline, transactions);
+    const download = await downloadPaymentTransactions(accessToken, source);
+    const result = await importPayments(accessToken, pipeline, download, source);
     return json({ status: "ok", pipeline_id: pipeline.pipeline_id, ...result });
   } catch (error) {
     console.error("Payment import failed", error);
@@ -403,12 +403,29 @@ function getPaymentSource(env, pipelineId) {
   const config = JSON.parse(env.PAYMENTS_SOURCE_CONFIG_JSON);
   const sources = Array.isArray(config) ? config : (config.sources || [config]);
   const source = sources.find((item) => item.pipeline_id === pipelineId);
-  if (!source?.drive_file_id) throw new Error(`Nincs banki Excel-forrás beállítva ehhez: ${pipelineId}`);
+  if (!source?.drive_file_id && !source?.drive_folder_id) {
+    throw new Error(`Nincs banki Excel-forrás beállítva ehhez: ${pipelineId}`);
+  }
   return source;
 }
 
+async function resolveLatestDriveFile(accessToken, folderId) {
+  const query = `'${folderId}' in parents and trashed=false and mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'`;
+  const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&orderBy=modifiedTime desc&fields=${encodeURIComponent("files(id,name,modifiedTime)")}&pageSize=1`;
+  const result = await googleFetch(url, accessToken);
+  const file = (result.files || [])[0];
+  if (!file) throw new Error("A megadott Drive-mappában nincs feldolgozható banki XLSX fájl.");
+  return file;
+}
+
 async function downloadPaymentTransactions(accessToken, source) {
-  const url = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(source.drive_file_id)}?alt=media`;
+  let fileId = source.drive_file_id;
+  let file = null;
+  if (!fileId) {
+    file = await resolveLatestDriveFile(accessToken, source.drive_folder_id);
+    fileId = file.id;
+  }
+  const url = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`;
   const response = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
   if (!response.ok) throw new Error(`A banki Excel letöltése nem sikerült: ${response.status}`);
   const workbook = XLSX.read(await response.arrayBuffer(), { type: "array", cellDates: false });
@@ -417,7 +434,12 @@ async function downloadPaymentTransactions(accessToken, source) {
   if (!sheet) throw new Error(`Nem található a banki Excel munkalapja: ${sheetName}`);
   const rows = XLSX.utils.sheet_to_json(sheet, { defval: "", raw: false });
   if (!rows.length) throw new Error("A banki Excel nem tartalmaz adat-sort.");
-  return Promise.all(rows.map((row, index) => paymentFromRow(row, source.columns, index + 2)));
+  const transactions = await Promise.all(rows.map((row, index) => paymentFromRow(row, source.columns, index + 2)));
+  return {
+    transactions,
+    rowCount: rows.length,
+    file: file ? { id: file.id, name: file.name, modifiedTime: file.modifiedTime } : null,
+  };
 }
 
 async function paymentFromRow(row, columns = {}, sourceRow) {
@@ -437,7 +459,8 @@ async function paymentFromRow(row, columns = {}, sourceRow) {
     message,
     sourceRow,
   };
-  payment.sourceKey = transactionId ? `id:${transactionId}` : `hash:${await paymentFingerprint(payment)}`;
+  payment.fingerprint = await paymentFingerprint(payment);
+  payment.sourceKey = transactionId ? `id:${transactionId}` : `hash:${payment.fingerprint}`;
   return payment;
 }
 
@@ -457,22 +480,31 @@ async function paymentFingerprint(payment) {
   return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-async function importPayments(accessToken, pipeline, transactions) {
+async function importPayments(accessToken, pipeline, download, source = {}) {
+  const { transactions } = download;
   const masterRows = await readSheetRows(accessToken, pipeline.spreadsheet_id, pipeline.tab_name, "A:AA");
   if (text(masterRows[0]?.[0]) !== "Közlemény") throw new Error("A fő Sheet első oszlopa nem Közlemény.");
   const paymentColumns = paymentColumnIndexes(masterRows[0]);
   const paymentSheets = await ensurePaymentSheets(accessToken, pipeline.spreadsheet_id);
   const logRows = await readSheetRows(accessToken, pipeline.spreadsheet_id, paymentSheets.log, "A:K");
   const pendingRows = await readSheetRows(accessToken, pipeline.spreadsheet_id, paymentSheets.pending, "A:K");
+  const correctionRows = await ensureReferenceCorrectionsSheet(accessToken, pipeline.spreadsheet_id);
+  const previousState = await readImportState(accessToken, pipeline.spreadsheet_id, paymentSheets.state);
   const registrations = masterRows.slice(1).map((row, index) => registrationForPayment(row, index + 2, pipeline.tab_name, paymentColumns)).filter(Boolean);
   const registrationsByReference = new Map(registrations.map((item) => [item.reference, item]));
+  const approvedCorrections = buildApprovedCorrections(correctionRows, registrationsByReference);
   const knownSources = new Set(logRows.slice(1).map((row) => text(row[0])).filter(Boolean));
   const pendingBySource = new Map(pendingRows.slice(1).map((row, index) => [text(row[0]), { row, rowIndex: index + 2 }]).filter(([key]) => key));
+  const watermark = determineImportStart(previousState, transactions);
 
   const masterWrites = [];
   const logWrites = [];
   const pendingWrites = [];
-  const summary = { new_transactions: 0, booked: 0, already_recorded: 0, pending: 0, duplicates: 0, manually_resolved: 0 };
+  const summary = {
+    new_transactions: 0, booked: 0, already_recorded: 0, pending: 0, duplicates: 0, manually_resolved: 0,
+    corrected_booked: 0, name_confirmed: 0,
+    total_rows: transactions.length, new_rows: 0, skipped_by_watermark: 0, state_reset: watermark.reset,
+  };
   const bookedReferences = new Set();
 
   for (const pending of pendingBySource.values()) {
@@ -491,10 +523,19 @@ async function importPayments(accessToken, pipeline, transactions) {
 
   let logRowIndex = logRows.length + 1;
   let pendingRowIndex = pendingRows.length + 1;
-  for (const payment of transactions) {
-    if (knownSources.has(payment.sourceKey)) { summary.duplicates += 1; continue; }
+  for (let index = 0; index < transactions.length; index += 1) {
+    const payment = transactions[index];
+    if (watermark.trusted && index < watermark.startIndex) {
+      summary.duplicates += 1;
+      summary.skipped_by_watermark += 1;
+      continue;
+    }
+    const isHashBased = payment.sourceKey.startsWith("hash:");
+    const dedupApplies = !isHashBased || !watermark.trusted;
+    if (dedupApplies && knownSources.has(payment.sourceKey)) { summary.duplicates += 1; continue; }
     summary.new_transactions += 1;
-    const candidates = extractReferences(payment.message);
+
+    const candidates = extractReferences(payment.message, source.reference_length);
     const matches = candidates.map((reference) => registrationsByReference.get(reference)).filter(Boolean);
     let status;
     let matchedReference = "";
@@ -506,12 +547,48 @@ async function importPayments(accessToken, pipeline, transactions) {
         summary.booked += 1;
         bookedReferences.add(matches[0].reference);
       } else summary.already_recorded += 1;
+    } else if (matches.length === 0) {
+      const correctionTargets = new Set(
+        candidates.filter((reference) => approvedCorrections.has(reference)).map((reference) => approvedCorrections.get(reference)),
+      );
+      if (correctionTargets.size === 1) {
+        const target = registrationsByReference.get([...correctionTargets][0]);
+        matchedReference = target.reference;
+        const result = bookPaymentIfNeeded(target, payment.bookingDate, masterWrites);
+        status = result === "booked" ? "Könyvelve javított közleménnyel" : "Már rögzített";
+        if (result === "booked") {
+          summary.booked += 1;
+          summary.corrected_booked += 1;
+          bookedReferences.add(target.reference);
+        } else summary.already_recorded += 1;
+      } else {
+        status = "Függő";
+      }
     } else {
-      status = matches.length > 1 ? "Többértelmű" : "Függő";
+      const surname = normalizedSurname(payment.senderName);
+      const nameMatches = surname
+        ? matches.filter((registration) => normalizedSurname(registration.studentName) === surname || normalizedSurname(registration.parentName) === surname)
+        : [];
+      if (nameMatches.length === 1) {
+        matchedReference = nameMatches[0].reference;
+        const result = bookPaymentIfNeeded(nameMatches[0], payment.bookingDate, masterWrites);
+        status = result === "booked" ? "Könyvelve névvel megerősítve" : "Már rögzített";
+        if (result === "booked") {
+          summary.booked += 1;
+          summary.name_confirmed += 1;
+          bookedReferences.add(nameMatches[0].reference);
+        } else summary.already_recorded += 1;
+      } else {
+        status = "Többértelmű";
+      }
+    }
+
+    if (status === "Függő" || status === "Többértelmű") {
       const suggestions = nameSuggestions(payment.senderName, registrations);
+      const suggestionsText = `${suggestions.length ? `${suggestions.join(" | ")} ` : ""}(könyvelés: ${payment.bookingDate})`;
       pendingWrites.push({
         range: `${quoteSheetName(paymentSheets.pending)}!A${pendingRowIndex}:K${pendingRowIndex}`,
-        values: [[payment.sourceKey, payment.bookingDate, payment.amount, payment.currency, payment.senderName, payment.senderAccount, payment.message, suggestions.join(" | "), "", status, ""]],
+        values: [[payment.sourceKey, payment.bookingDate, payment.amount, payment.currency, payment.senderName, payment.senderAccount, payment.message, suggestionsText, "", status, ""]],
       });
       pendingRowIndex += 1;
       summary.pending += 1;
@@ -522,10 +599,12 @@ async function importPayments(accessToken, pipeline, transactions) {
     });
     logRowIndex += 1;
   }
+  summary.new_rows = summary.new_transactions;
 
   if (masterWrites.length) await writeSheetRanges(accessToken, pipeline.spreadsheet_id, masterWrites);
   if (logWrites.length) await writeSheetRanges(accessToken, pipeline.spreadsheet_id, logWrites);
   if (pendingWrites.length) await writeSheetRanges(accessToken, pipeline.spreadsheet_id, pendingWrites);
+  await writeSheetRanges(accessToken, pipeline.spreadsheet_id, [importStateWrite(paymentSheets.state, transactions, summary.new_rows)]);
   if (bookedReferences.size && pipeline.email_automation !== false) {
     const drafts = await refreshPaymentEmailDrafts(accessToken, pipeline, bookedReferences);
     summary.payment_email_drafts = drafts.processed;
@@ -533,6 +612,69 @@ async function importPayments(accessToken, pipeline, transactions) {
     summary.payment_email_drafts = 0;
   }
   return summary;
+}
+
+function determineImportStart(state, transactions) {
+  if (!state || !state.rowCount) return { startIndex: 0, trusted: false, reset: false };
+  if (state.rowCount > transactions.length) return { startIndex: 0, trusted: false, reset: true };
+  const checkCount = Math.min(2, state.rowCount, state.lastRowFingerprints.length);
+  if (!checkCount) return { startIndex: 0, trusted: false, reset: true };
+  for (let i = 1; i <= checkCount; i += 1) {
+    const rowIndex = state.rowCount - i;
+    const expected = state.lastRowFingerprints[state.lastRowFingerprints.length - i];
+    if (!expected || !transactions[rowIndex] || transactions[rowIndex].fingerprint !== expected) {
+      return { startIndex: 0, trusted: false, reset: true };
+    }
+  }
+  return { startIndex: state.rowCount, trusted: true, reset: false };
+}
+
+function buildApprovedCorrections(correctionRows, registrationsByReference) {
+  const candidateTargets = new Map();
+  correctionRows.slice(1).forEach((row) => {
+    if (!isChecked(row[9])) return;
+    const erroneous = text(row[0]);
+    const correct = text(row[1]);
+    if (!erroneous || !correct || !registrationsByReference.has(correct)) return;
+    if (!candidateTargets.has(erroneous)) candidateTargets.set(erroneous, new Set());
+    candidateTargets.get(erroneous).add(correct);
+  });
+  const approved = new Map();
+  for (const [erroneous, targets] of candidateTargets) {
+    if (targets.size === 1) approved.set(erroneous, [...targets][0]);
+  }
+  return approved;
+}
+
+async function readImportState(accessToken, spreadsheetId, stateTab) {
+  const rows = await readSheetRows(accessToken, spreadsheetId, stateTab, "A2:F2");
+  const row = rows[0];
+  if (!row || !text(row[0]) || !Number(row[1])) return null;
+  return {
+    lastImportAt: text(row[0]),
+    rowCount: Number(row[1]) || 0,
+    newRows: Number(row[2]) || 0,
+    lastTransactionId: text(row[3]),
+    latestBookingDate: text(row[4]),
+    lastRowFingerprints: text(row[5]) ? text(row[5]).split("|").filter(Boolean) : [],
+  };
+}
+
+function importStateWrite(stateTab, transactions, newRowsCount) {
+  const tail = transactions.slice(-2);
+  const last = transactions[transactions.length - 1];
+  const latestBookingDate = transactions.reduce((latest, payment) => (payment.bookingDate > latest ? payment.bookingDate : latest), "");
+  return {
+    range: `${quoteSheetName(stateTab)}!A2:F2`,
+    values: [[
+      new Date().toISOString(),
+      transactions.length,
+      newRowsCount,
+      last?.transactionId || "",
+      latestBookingDate,
+      tail.map((payment) => payment.fingerprint).join("|"),
+    ]],
+  };
 }
 
 function paymentColumnIndexes(header) {
@@ -565,8 +707,11 @@ function bookPaymentIfNeeded(registration, bookingDate, masterWrites) {
   return "booked";
 }
 
-function extractReferences(message) {
-  return [...new Set((text(message).match(/(?<!\d)\d{1,7}(?!\d)/g) || []))];
+function extractReferences(message, expectedLength) {
+  const all = [...new Set((text(message).match(/(?<!\d)\d{1,7}(?!\d)/g) || []))];
+  if (!expectedLength) return all;
+  const filtered = all.filter((reference) => reference.length === expectedLength);
+  return filtered.length ? filtered : all;
 }
 
 function nameSuggestions(senderName, registrations) {
@@ -592,12 +737,19 @@ function updateLogStatusWrite(logRows, logTab, sourceKey, status, matchedReferen
   if (index >= 0) writes.push({ range: `${quoteSheetName(logTab)}!I${index + 1}:K${index + 1}`, values: [[matchedReference, status, new Date().toISOString()]] });
 }
 
+const PAYMENT_STATE_TAB = "Befizetés import állapot";
+const PAYMENT_STATE_HEADERS = [
+  "Utolsó import ideje", "Fájl sorainak száma", "Feldolgozott új sorok",
+  "Utolsó tranzakcióazonosító", "Legkésőbbi könyvelési dátum", "Utolsó sorok ujjlenyomata",
+];
+
 async function ensurePaymentSheets(accessToken, spreadsheetId) {
   const log = "Befizetések napló";
   const pending = "Függő befizetések";
+  const state = PAYMENT_STATE_TAB;
   const metadata = await getSpreadsheetMetadata(accessToken, spreadsheetId);
   const titles = new Set((metadata.sheets || []).map((sheet) => sheet.properties?.title));
-  const missing = [log, pending].filter((title) => !titles.has(title));
+  const missing = [log, pending, state].filter((title) => !titles.has(title));
   if (missing.length) {
     const baseUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}`;
     await googleFetch(`${baseUrl}:batchUpdate`, accessToken, {
@@ -608,12 +760,17 @@ async function ensurePaymentSheets(accessToken, spreadsheetId) {
   const headers = {
     [log]: ["Forrásazonosító", "Könyvelési dátum", "Összeg", "Deviza", "Feladó neve", "Feladó számlaszáma", "Eredeti közlemény", "Kinyert közleményjelöltek", "Párosított közlemény", "Státusz", "Feldolgozva"],
     [pending]: ["Forrásazonosító", "Könyvelési dátum", "Összeg", "Deviza", "Feladó neve", "Feladó számlaszáma", "Eredeti közlemény", "Javaslatok", "Kézzel hozzárendelt közlemény", "Státusz", "Feldolgozva"],
+    [state]: PAYMENT_STATE_HEADERS,
   };
-  for (const title of [log, pending]) {
-    const rows = await readSheetRows(accessToken, spreadsheetId, title, "A1:K1");
-    if (!rows.length || !text(rows[0]?.[0])) await writeSheetRanges(accessToken, spreadsheetId, [{ range: `${quoteSheetName(title)}!A1:K1`, values: [headers[title]] }]);
+  const lastColumns = { [log]: "K", [pending]: "K", [state]: "F" };
+  for (const title of [log, pending, state]) {
+    const lastColumn = lastColumns[title];
+    const rows = await readSheetRows(accessToken, spreadsheetId, title, `A1:${lastColumn}1`);
+    if (!rows.length || !text(rows[0]?.[0])) {
+      await writeSheetRanges(accessToken, spreadsheetId, [{ range: `${quoteSheetName(title)}!A1:${lastColumn}1`, values: [headers[title]] }]);
+    }
   }
-  return { log, pending };
+  return { log, pending, state };
 }
 
 const REFERENCE_CORRECTION_HEADERS = [
@@ -1953,7 +2110,7 @@ function importResultPage(result, count) {
 function escapeHtml(value) { return String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char])); }
 
 export {
-  CSV_HEADERS, brevoSendKey, brevoStatus, emailRevisionHashFromRow, extractReferences, findMasterRow,
-  mergeMasterRow, nameSuggestions, normalizeForMatch, parseCsv, parseCsvRegistrations,
+  CSV_HEADERS, brevoSendKey, brevoStatus, buildApprovedCorrections, emailRevisionHashFromRow, extractReferences,
+  findMasterRow, mergeMasterRow, nameSuggestions, normalizeForMatch, parseCsv, parseCsvRegistrations,
   partitionManualImportRegistrations, paymentFromRow, recordBrevoEvent, registrationFromCsvRow,
 };

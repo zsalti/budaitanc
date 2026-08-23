@@ -98,9 +98,12 @@ function importPayments() {
 
   const result = JSON.parse(body);
   ui.alert(
-    `Befizetések feldolgozva. Új: ${result.new_transactions}, automatikusan könyvelt: ${result.booked}, ` +
-    `már rögzített: ${result.already_recorded}, függő: ${result.pending}, korábbi/ismételt: ${result.duplicates}, ` +
-    `kézzel feloldott: ${result.manually_resolved}.`,
+    `Befizetések feldolgozva. Fájl sorai: ${result.total_rows}, új sorok: ${result.new_rows}, ` +
+    `automatikusan könyvelt: ${result.booked} (ebből javított közleménnyel: ${result.corrected_booked}, ` +
+    `névvel megerősítve: ${result.name_confirmed}), már rögzített: ${result.already_recorded}, ` +
+    `függő: ${result.pending}, korábbi/ismételt: ${result.duplicates} ` +
+    `(ebből vízjel miatt kihagyva: ${result.skipped_by_watermark}), kézzel feloldott: ${result.manually_resolved}` +
+    `${result.state_reset ? ', FIGYELEM: a vízjel-ellenőrzés visszaállt (a fájl átrendeződhetett)' : ''}.`,
   );
 }
 

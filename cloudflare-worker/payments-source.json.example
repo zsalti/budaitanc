@@ -1,7 +1,11 @@
 {
   "pipeline_id": "tanctanfolyam_jelentkezes",
+  "_comment_drive_source": "Vagy drive_file_id (mindig ugyanaz a fájl, felülírandó), vagy drive_folder_id (a mappa legfrissebb XLSX-ét tölti le). Ha mindkettő szerepel, a drive_file_id élvez elsőbbséget.",
   "drive_file_id": "REPLACE_WITH_THE_STABLE_GOOGLE_DRIVE_XLSX_FILE_ID",
+  "drive_folder_id": "1oQKry94nob1psVAN7YnmLATNUYXbpE2h",
   "sheet_name": "Kivonat",
+  "_comment_reference_length": "Opcionális: ha megadva, a jelöltkódokat erre a hosszra szűkíti (pl. 4 a Gravity Forms ID-hoz), kivéve ha ez üres eredményt adna — akkor a szűretlen lista marad.",
+  "reference_length": 4,
   "columns": {
     "transaction_id": ["Tranzakcióazonosító", "Transaction ID"],
     "booking_date": ["Könyvelési dátum", "Booking date"],
