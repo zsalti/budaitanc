@@ -176,6 +176,20 @@ Sheet AH:AR automatizálási mezőit és az `E-mail kimenet` piszkozatát.
   nyilvános helyen megjelent kulcsot vissza kell vonni, és új kulcsot kell
   létrehozni.
 
+### Hibásan kiküldött közlemények
+
+A `Budai Tánc → Hibás közlemények összevezetése` menüpont kizárólag
+ellenőrzőlistát készít; nem frissít e-mail-piszkozatot, nem változtat meg régi
+e-mail-sort és nem küld levelet. A `Közlemény eltérések` fülön minden ilyen
+esethez megjelenik a hibásan kiküldött közlemény, a levél címzettje és — ha az
+e-mail cím a `TAGOK I FÉLÉV` forrásban pontosan egy rekordhoz tartozik — a
+címzett valódi közleménye.
+
+Az `Feldolgozható` jelölőt csak emberi ellenőrzés után szabad bejelölni. Ez a
+lista jelenleg még nem könyvel automatikusan banki tételt; a későbbi
+banki-párosítási szabály kizárólag az így jóváhagyott, egyértelmű megfeleltetéseket
+használhatja.
+
 Az Apps Script első használatakor a `Budai Tánc → E-mail token beállítása`
 menüben az `EMAIL_ADMIN_TOKEN` értékét kell megadni. A `BREVO_API_KEY` nem
 kerül az Apps Scriptbe.

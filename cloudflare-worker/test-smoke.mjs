@@ -54,6 +54,7 @@ const staffState = [
 ];
 const paymentLogState = [["Forrásazonosító", "Könyvelési dátum", "Összeg", "Deviza", "Feladó neve", "Feladó számlaszáma", "Eredeti közlemény", "Kinyert közleményjelöltek", "Párosított közlemény", "Státusz", "Feldolgozva"]];
 const paymentPendingState = [["Forrásazonosító", "Könyvelési dátum", "Összeg", "Deviza", "Feladó neve", "Feladó számlaszáma", "Eredeti közlemény", "Javaslatok", "Kézzel hozzárendelt közlemény", "Státusz", "Feldolgozva"]];
+const referenceCorrectionsState = [];
 const automationConfigState = [[
   "Tanfolyam kulcs", "GF pontos érték / alias", "Nap", "Kezdés", "Befejezés", "Helyszín", "Tanár", "Heti alkalom", "Perc/alkalom", "Díjkategória", "Kézi elbírálás",
   "", "Félév", "Sáv kezdete", "Sáv vége", "Díjkategória", "Alapár", "Kedvezményes ár", "", "Tanfolyam kulcs", "Dátum", "Típus", "Kezdés", "Befejezés", "Helyszín",
@@ -68,6 +69,7 @@ let masterColumnCount = 44;
 let staffColumnCount = 9;
 let nextTemplateId = 101;
 let emailStatusFormatRequest = null;
+let hasReferenceCorrectionsSheet = false;
 for (const row of emailSettingsState) {
   if (String(row[0] || "").startsWith("TEMPLATE_")) row[1] = nextTemplateId++;
 }
@@ -124,6 +126,9 @@ globalThis.fetch = async (input, options = {}) => {
       if (request.addConditionalFormatRule || request.updateConditionalFormatRule) {
         emailStatusFormatRequest = request;
       }
+      if (request.addSheet?.properties?.title === "Közlemény eltérések") {
+        hasReferenceCorrectionsSheet = true;
+      }
     }
     return new Response(JSON.stringify({ replies: [] }), { status: 200 });
   }
@@ -139,6 +144,7 @@ globalThis.fetch = async (input, options = {}) => {
       { properties: { sheetId: 5, title: "E-mail kimenet" } },
       { properties: { sheetId: 6, title: "E-mail beállítások" } },
       { properties: { sheetId: 7, title: "E-mail eseménynapló" } },
+      ...(hasReferenceCorrectionsSheet ? [{ properties: { sheetId: 8, title: "Közlemény eltérések" } }] : []),
     ] }), { status: 200 });
   }
   if (url.includes(":append")) {
@@ -345,6 +351,7 @@ try {
   legacyManualRow[1] = "LEGACY-MANUAL-001";
   legacyManualRow[2] = "1";
   legacyManualRow[3] = "2026-08-03-v1-draft";
+  legacyManualRow[4] = readyRow[17];
   legacyManualRow[12] = "ELKÜLDVE";
   legacyManualRow[13] = "MANUÁLIS";
   legacyManualRow[18] = true;
@@ -362,11 +369,82 @@ try {
   assert.equal(emailOutputState.filter((row) => row[1] === "LEGACY-MANUAL-001").length, 1);
   assert.equal(legacyManualRow[18], true);
 
+  const mismatchedLegacyMasterRow = [...readyRow];
+  mismatchedLegacyMasterRow[0] = "MISMATCHED-LEGACY-001";
+  mismatchedLegacyMasterRow[8] = "igen";
+  sheetState.push(mismatchedLegacyMasterRow);
+  const actualWrongRecipientMasterRow = [...readyRow];
+  actualWrongRecipientMasterRow[0] = "ACTUAL-RECIPIENT-001";
+  actualWrongRecipientMasterRow[17] = "wrong-recipient@example.invalid";
+  sheetState.push(actualWrongRecipientMasterRow);
+  const mismatchedLegacyRow = Array.from({ length: 34 }, () => "");
+  mismatchedLegacyRow[0] = "MISMATCHED-LEGACY-001|PRÓBA|2026-08-03-v1-draft";
+  mismatchedLegacyRow[1] = "MISMATCHED-LEGACY-001";
+  mismatchedLegacyRow[2] = "PRÓBA";
+  mismatchedLegacyRow[3] = "2026-08-03-v1-draft";
+  mismatchedLegacyRow[4] = "wrong-recipient@example.invalid";
+  mismatchedLegacyRow[12] = "ELKÜLDVE";
+  mismatchedLegacyRow[13] = "MANUÁLIS";
+  mismatchedLegacyRow[18] = true;
+  emailOutputState.push(mismatchedLegacyRow);
+  const correctedMismatchedLegacy = await worker.fetch(new Request("https://example.test/emails/drafts/test-email-token", {
+    method: "POST", body: JSON.stringify({ pipeline_id: pipeline.pipeline_id }),
+  }), env);
+  assert.equal(correctedMismatchedLegacy.status, 200);
+  const repairedLegacyDraft = emailOutputState.find((row) => (
+    row[1] === "MISMATCHED-LEGACY-001" && row[4] === readyRow[17] && row[18] !== true
+  ));
+  assert.ok(repairedLegacyDraft);
+  assert.equal(mismatchedLegacyRow[4], "wrong-recipient@example.invalid");
+  assert.equal(mismatchedLegacyRow[18], true);
+
+  const reconciliation = await worker.fetch(new Request("https://example.test/emails/reconcile/test-email-token", {
+    method: "POST", body: JSON.stringify({ pipeline_id: pipeline.pipeline_id }),
+  }), env);
+  assert.equal(reconciliation.status, 200);
+  const reconciliationResult = await reconciliation.json();
+  assert.equal(reconciliationResult.status, "ok");
+  assert.equal(reconciliationResult.pipeline_id, pipeline.pipeline_id);
+  assert.equal(reconciliationResult.suggested, 1);
+  assert.ok(reconciliationResult.manual >= 0);
+  assert.equal(reconciliationResult.sheet, "Közlemény eltérések");
+  assert.deepEqual(referenceCorrectionsState[0].slice(0, 3), ["Hibás közlemény", "Valódi közlemény", "Hibás levél címzettje"]);
+  const suggestedCorrection = referenceCorrectionsState.find((row) => row[0] === "MISMATCHED-LEGACY-001" && row[1] === "ACTUAL-RECIPIENT-001");
+  assert.ok(suggestedCorrection, JSON.stringify(referenceCorrectionsState));
+  assert.deepEqual(suggestedCorrection.slice(0, 5), [
+    "MISMATCHED-LEGACY-001", "ACTUAL-RECIPIENT-001", "wrong-recipient@example.invalid", "Teszt Elek", "Minta Anna",
+  ]);
+  assert.equal(suggestedCorrection[7], "JAVASOLT");
+  assert.match(suggestedCorrection[8], /egyértelműen másik forrásrekordhoz/i);
+
+  const ambiguousMasterFirst = [...readyRow];
+  ambiguousMasterFirst[0] = "AMBIGUOUS-ENTRY-001";
+  ambiguousMasterFirst[17] = "first@example.invalid";
+  const ambiguousMasterSecond = [...readyRow];
+  ambiguousMasterSecond[0] = "AMBIGUOUS-ENTRY-001";
+  ambiguousMasterSecond[17] = "second@example.invalid";
+  sheetState.push(ambiguousMasterFirst, ambiguousMasterSecond);
+  const ambiguousEmailRow = Array.from({ length: 34 }, () => "");
+  ambiguousEmailRow[0] = `AMBIGUOUS-ENTRY-001|ENROLLMENT|1|${TEMPLATE_VERSION}`;
+  ambiguousEmailRow[1] = "AMBIGUOUS-ENTRY-001";
+  ambiguousEmailRow[4] = "first@example.invalid";
+  ambiguousEmailRow[11] = true;
+  ambiguousEmailRow[12] = "KÜLDHETŐ";
+  emailOutputState.push(ambiguousEmailRow);
+  const blockedAmbiguous = await worker.fetch(new Request("https://example.test/emails/drafts/test-email-token", {
+    method: "POST", body: JSON.stringify({ pipeline_id: pipeline.pipeline_id }),
+  }), env);
+  assert.equal(blockedAmbiguous.status, 200);
+  assert.equal(ambiguousEmailRow[11], true);
+  assert.equal(ambiguousEmailRow[12], "KÜLDHETŐ");
+  assert.equal(emailOutputState.filter((row) => row[1] === "AMBIGUOUS-ENTRY-001").length, 1);
+
   const legacyDraftRow = Array.from({ length: 34 }, () => "");
   legacyDraftRow[0] = "LEGACY-DRAFT-001|ENROLLMENT|1|2026-08-03-v1-draft";
   legacyDraftRow[1] = "LEGACY-DRAFT-001";
   legacyDraftRow[2] = "1";
   legacyDraftRow[3] = "2026-08-03-v1-draft";
+  legacyDraftRow[4] = readyRow[17];
   legacyDraftRow[12] = "KÜLDHETŐ";
   emailOutputState.push(legacyDraftRow);
   const legacyDraftMasterRow = [...readyRow];
@@ -462,6 +540,7 @@ function stateForRange(range, url = "") {
   if (value.includes("E-mail eseménynapló")) return emailEventLogState;
   if (value.includes("Befizetések napló")) return paymentLogState;
   if (value.includes("Függő befizetések")) return paymentPendingState;
+  if (value.includes("Közlemény eltérések")) return referenceCorrectionsState;
   return url.includes("test-staff-spreadsheet") ? staffState : sheetState;
 }
 

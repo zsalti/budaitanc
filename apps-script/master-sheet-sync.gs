@@ -13,6 +13,7 @@ function onOpen() {
     .addItem('Befizetések érkeztetése', 'importPayments')
     .addItem('E-mail lapok inicializálása', 'setupEmailInfrastructure')
     .addItem('E-mail-piszkozatok frissítése', 'refreshEmailDrafts')
+    .addItem('Hibás közlemények összevezetése', 'reconcileEmailReferences')
     .addItem('Jóváhagyott e-mailek küldése', 'sendApprovedEmails')
     .addSeparator()
     .addItem('Szinkron token beállítása', 'configureSyncToken')
@@ -107,6 +108,14 @@ function refreshEmailDrafts() {
   const result = callEmailEndpoint_('drafts');
   SpreadsheetApp.getUi().alert(
     `Piszkozatok frissítve. Feldolgozott: ${result.processed}, küldhető: ${result.ready}, kézi: ${result.manual}.`,
+  );
+}
+
+function reconcileEmailReferences() {
+  const result = callEmailEndpoint_('reconcile');
+  SpreadsheetApp.getUi().alert(
+    `Közlemény-eltérések frissítve. Összesen: ${result.total}, egyértelmű javaslat: ${result.suggested}, ` +
+    `kézi elbírálás: ${result.manual}. A „${result.sheet}” fülön ellenőrizhetők.`,
   );
 }
 
