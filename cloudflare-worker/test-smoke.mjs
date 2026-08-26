@@ -128,6 +128,7 @@ let masterColumnCount = 44;
 let staffColumnCount = 9;
 let nextTemplateId = 101;
 let emailStatusFormatRequest = null;
+const emailCheckboxValidationRequests = [];
 let hasReferenceCorrectionsSheet = false;
 for (const row of emailSettingsState) {
   if (String(row[0] || "").startsWith("TEMPLATE_")) row[1] = nextTemplateId++;
@@ -191,6 +192,9 @@ globalThis.fetch = async (input, options = {}) => {
       }
       if (request.addConditionalFormatRule || request.updateConditionalFormatRule) {
         emailStatusFormatRequest = request;
+      }
+      if (request.setDataValidation) {
+        emailCheckboxValidationRequests.push(request.setDataValidation);
       }
       if (request.addSheet?.properties?.title === "Közlemény eltérések") {
         hasReferenceCorrectionsSheet = true;
@@ -580,6 +584,17 @@ try {
   assert.equal(staleIdentityRow[45], "Másik");
   const readyEmail = emailOutputState.find((row) => row[1] === "TEST-EMAIL-001");
   assert.equal(readyEmail[12], "KÜLDHETŐ");
+  const readyEmailRowIndex = emailOutputState.indexOf(readyEmail);
+  for (const column of [11, 18]) {
+    const validation = emailCheckboxValidationRequests.find((request) => (
+      request.range.startColumnIndex === column
+      && request.range.startRowIndex <= readyEmailRowIndex
+      && request.range.endRowIndex > readyEmailRowIndex
+    ));
+    assert.ok(validation, `a ${column}. checkbox-oszlop validációja lefedi az új e-mail-sort`);
+    assert.equal(validation.rule.condition.type, "BOOLEAN");
+    assert.equal(validation.filteredRowsIncluded, true);
+  }
   const initialReadySourceHash = readyEmail[15];
   const initialReadyAutomation = readyRow.slice(34, 44);
   assert.equal(emailOutputState.filter((row) => row[1] === "LEGACY-MANUAL-001").length, 1);

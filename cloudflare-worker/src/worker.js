@@ -1281,7 +1281,18 @@ async function ensureEmailInfrastructure(accessToken, pipeline) {
   }
   await writeSheetRanges(accessToken, pipeline.spreadsheet_id, writes);
   await ensureEmailOutputStatusFormatting(accessToken, pipeline.spreadsheet_id, metadata);
-  return { created_tabs: missing, output_columns: EMAIL_OUTPUT_HEADERS.length, settings_initialized: !settingsRows.length };
+  const emailRows = await readSheetRows(
+    accessToken, pipeline.spreadsheet_id, EMAIL_OUTPUT_TAB, "A:AH",
+  );
+  const checkboxRows = await ensureEmailOutputCheckboxValidation(
+    accessToken, pipeline.spreadsheet_id, 2, emailRows.length,
+  );
+  return {
+    created_tabs: missing,
+    output_columns: EMAIL_OUTPUT_HEADERS.length,
+    settings_initialized: !settingsRows.length,
+    checkbox_rows: checkboxRows,
+  };
 }
 
 async function ensureEmailOutputStatusFormatting(accessToken, spreadsheetId, metadata) {
@@ -1320,6 +1331,42 @@ async function ensureEmailOutputStatusFormatting(accessToken, spreadsheetId, met
   });
 }
 
+async function ensureEmailOutputCheckboxValidation(
+  accessToken, spreadsheetId, startRow, endRow,
+) {
+  if (!Number.isInteger(startRow) || !Number.isInteger(endRow) || endRow < startRow) return 0;
+  const metadata = await getSpreadsheetMetadata(accessToken, spreadsheetId);
+  const emailSheet = (metadata.sheets || []).find(
+    (sheet) => sheet.properties?.title === EMAIL_OUTPUT_TAB,
+  );
+  if (!emailSheet) throw new Error(`Hiányzó lap: ${EMAIL_OUTPUT_TAB}`);
+  const rule = {
+    condition: { type: "BOOLEAN" },
+    strict: true,
+    showCustomUi: true,
+  };
+  const baseUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}`;
+  await googleFetch(`${baseUrl}:batchUpdate`, accessToken, {
+    method: "POST",
+    body: JSON.stringify({
+      requests: [EMAIL_COLUMN.APPROVED, EMAIL_COLUMN.MANUAL_SENT].map((columnIndex) => ({
+        setDataValidation: {
+          range: {
+            sheetId: emailSheet.properties.sheetId,
+            startRowIndex: startRow - 1,
+            endRowIndex: endRow,
+            startColumnIndex: columnIndex,
+            endColumnIndex: columnIndex + 1,
+          },
+          rule,
+          filteredRowsIncluded: true,
+        },
+      })),
+    }),
+  });
+  return endRow - startRow + 1;
+}
+
 async function loadEmailSettings(accessToken, pipeline) {
   const metadata = await getSpreadsheetMetadata(accessToken, pipeline.spreadsheet_id);
   const exists = (metadata.sheets || []).some((sheet) => sheet.properties?.title === EMAIL_SETTINGS_TAB);
@@ -1343,6 +1390,7 @@ async function refreshEmailDrafts(accessToken, pipeline, entryIds = null) {
   const config = parseAutomationConfig(configRows);
   const mutableEmailRows = emailRows.map((row) => [...row]);
   const writes = [];
+  const emailCheckboxRows = [];
   const results = [];
   const now = new Date().toISOString();
   const duplicateEntryIds = duplicateMasterEntryIds(masterRows);
@@ -1506,6 +1554,7 @@ async function refreshEmailDrafts(accessToken, pipeline, entryIds = null) {
       while (mutableEmailRows.length < queueRowIndex) mutableEmailRows.push([]);
       mutableEmailRows[queueRowIndex - 1] = queueRow;
       writes.push({ range: `${quoteSheetName(EMAIL_OUTPUT_TAB)}!A${queueRowIndex}:AH${queueRowIndex}`, values: [queueRow] });
+      emailCheckboxRows.push(queueRowIndex);
     }
 
     const finalReason = [calculation.manualReason, draft.manualReason, draft.configurationWarning].filter(Boolean).join(" ");
@@ -1516,6 +1565,14 @@ async function refreshEmailDrafts(accessToken, pipeline, entryIds = null) {
   }
 
   if (writes.length) await writeSheetRanges(accessToken, pipeline.spreadsheet_id, writes);
+  if (emailCheckboxRows.length) {
+    await ensureEmailOutputCheckboxValidation(
+      accessToken,
+      pipeline.spreadsheet_id,
+      Math.min(...emailCheckboxRows),
+      Math.max(...emailCheckboxRows),
+    );
+  }
   return {
     processed: results.length,
     ready: results.filter((item) => item.status === AUTOMATION_STATUS.READY).length,
@@ -1542,6 +1599,7 @@ async function refreshPaymentEmailDrafts(accessToken, pipeline, entryIds) {
 
   const mutableEmailRows = emailRows.map((row) => [...row]);
   const writes = [];
+  const emailCheckboxRows = [];
   const results = [];
   const now = new Date().toISOString();
   const duplicateEntryIds = duplicateMasterEntryIds(masterRows);
@@ -1640,6 +1698,7 @@ async function refreshPaymentEmailDrafts(accessToken, pipeline, entryIds) {
     while (mutableEmailRows.length < queueRowIndex) mutableEmailRows.push([]);
     mutableEmailRows[queueRowIndex - 1] = queueRow;
     writes.push({ range: `${quoteSheetName(EMAIL_OUTPUT_TAB)}!A${queueRowIndex}:AH${queueRowIndex}`, values: [queueRow] });
+    emailCheckboxRows.push(queueRowIndex);
     const mainRow = index + 1;
     if (!registration.contactFirstName && draft.contactFirstName) {
       writes.push({ range: `${quoteSheetName(pipeline.tab_name)}!${CONTACT_FIRST_NAME_COLUMN}${mainRow}`, values: [[draft.contactFirstName]] });
@@ -1651,6 +1710,14 @@ async function refreshPaymentEmailDrafts(accessToken, pipeline, entryIds) {
   }
 
   if (writes.length) await writeSheetRanges(accessToken, pipeline.spreadsheet_id, writes);
+  if (emailCheckboxRows.length) {
+    await ensureEmailOutputCheckboxValidation(
+      accessToken,
+      pipeline.spreadsheet_id,
+      Math.min(...emailCheckboxRows),
+      Math.max(...emailCheckboxRows),
+    );
+  }
   return { processed: results.length, results };
 }
 

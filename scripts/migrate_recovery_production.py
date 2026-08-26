@@ -23,6 +23,7 @@ from config import load_config
 from google_sheets_sync import build_service
 from scripts.rehearse_recovery_sheet import (
     EMAIL_OUTPUT_TAB,
+    ensure_email_output_checkboxes,
     ensure_email_sent_formatting,
     has_consistent_send_history,
     quote_tab,
@@ -440,6 +441,11 @@ def main() -> int:
         clear_and_write_targets(
             service, config.spreadsheet_id, master_tab, targets
         )
+        checkboxes = ensure_email_output_checkboxes(
+            service,
+            config.spreadsheet_id,
+            targets[EMAIL_OUTPUT_TAB],
+        )
         written_hashes = validate_written_targets(
             service, config.spreadsheet_id, master_tab, targets
         )
@@ -476,6 +482,7 @@ def main() -> int:
         "migration_succeeded": True,
         "rollback_required": False,
         "written_semantic_hashes": written_hashes,
+        "email_checkboxes": checkboxes,
         "sent_conditional_formatting": formatting,
     }
     write_report(args.report, success_report)

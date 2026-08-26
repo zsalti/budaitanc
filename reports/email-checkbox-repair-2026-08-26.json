@@ -1,0 +1,31 @@
+{
+  "approval_id": "user-directed-checkbox-repair-2026-08-26",
+  "checkbox_repair_revision_sha256": "aba39fb6af492bf81390fceae3aa37fe083aee25918b48ac89bcf8d6711c4223",
+  "generated_at": "2026-08-26T19:56:39+02:00",
+  "mode": "production_email_checkbox_repair",
+  "production_spreadsheet_id": "1hHlwBe_pK-Cdg7zoGFrd1adeTw8lYAMyZOCKZmzlcTs",
+  "staging_spreadsheet_id": "1dNrM-YQpXW_KyxUqEaztZM3fVj7ILISkaBAHxh8u4RQ",
+  "tab": "E-mail kimenet",
+  "active_rows": 169,
+  "approval_checkbox": {
+    "column": "L",
+    "boolean_validation_rows": 169,
+    "checked_rows": 0
+  },
+  "manual_sent_checkbox": {
+    "column": "S",
+    "boolean_validation_rows": 169,
+    "checked_rows": 105
+  },
+  "proven_sent_green_rows": 117,
+  "false_green_rows": 0,
+  "missing_green_rows": 0,
+  "email_event_log_unchanged": true,
+  "real_email_send": false,
+  "worker": {
+    "bundle_sha256": "8ead887580f9ae2a3aa7df255e0c27cdf46ad075b06aa3a084866d4e52c2f518",
+    "version_id": "fe8c0392-a985-4543-8813-1829bc1aa4db",
+    "secret_binding_count": 13,
+    "health": "ok"
+  }
+}

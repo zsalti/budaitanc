@@ -37,6 +37,7 @@ TAB_FILES = {
 }
 
 EMAIL_OUTPUT_TAB = "E-mail kimenet"
+EMAIL_APPROVED_COLUMN_INDEX = 11
 EMAIL_STATUS_COLUMN_INDEX = 12
 EMAIL_MESSAGE_ID_COLUMN_INDEX = 13
 EMAIL_MANUAL_SENT_COLUMN_INDEX = 18
@@ -74,6 +75,16 @@ def semantic_hash(rows: list[list[Any]]) -> str:
 
 def quote_tab(title: str) -> str:
     return "'" + title.replace("'", "''") + "'"
+
+
+def column_letter(index: int) -> str:
+    """Return the one-based A1 column label for a zero-based index."""
+    value = index + 1
+    result = ""
+    while value:
+        value, remainder = divmod(value - 1, 26)
+        result = chr(65 + remainder) + result
+    return result
 
 
 def read_tab(service: Any, spreadsheet_id: str, title: str) -> list[list[Any]]:
@@ -318,6 +329,111 @@ def ensure_email_sent_formatting(
     }
 
 
+def ensure_email_output_checkboxes(
+    service: Any,
+    spreadsheet_id: str,
+    email_rows: list[list[Any]],
+) -> dict[str, Any]:
+    """Restore typed checkbox values and validation without changing meaning."""
+    rows = trim_rows(email_rows)
+    if not rows:
+        raise RuntimeError("Az E-mail kimenet nem tartalmaz fejlécet.")
+    header = rows[0]
+    required_headers = {
+        "Jóváhagyva": EMAIL_APPROVED_COLUMN_INDEX,
+        "Manuálisan elküldve": EMAIL_MANUAL_SENT_COLUMN_INDEX,
+    }
+    for expected_header, index in required_headers.items():
+        if len(header) <= index or header[index] != expected_header:
+            raise RuntimeError(
+                f"Az E-mail kimenet checkbox-oszlopa hiányzik: {expected_header}"
+            )
+
+    metadata = (
+        service.spreadsheets()
+        .get(
+            spreadsheetId=spreadsheet_id,
+            fields="sheets(properties(sheetId,title,gridProperties(rowCount,columnCount)))",
+        )
+        .execute()
+    )
+    email_sheet = next(
+        (
+            sheet
+            for sheet in metadata.get("sheets", [])
+            if sheet.get("properties", {}).get("title") == EMAIL_OUTPUT_TAB
+        ),
+        None,
+    )
+    if email_sheet is None:
+        raise RuntimeError(f"Hiányzó lap: {EMAIL_OUTPUT_TAB}")
+    properties = email_sheet["properties"]
+    sheet_id = properties["sheetId"]
+    grid_row_count = int(properties.get("gridProperties", {}).get("rowCount", 0))
+    if grid_row_count < max(2, len(rows)):
+        raise RuntimeError("Az E-mail kimenet gridje kisebb az aktív adatsornál.")
+
+    active_rows = rows[1:]
+    value_updates = []
+    for index in required_headers.values():
+        if active_rows:
+            label = column_letter(index)
+            value_updates.append({
+                "range": f"{quote_tab(EMAIL_OUTPUT_TAB)}!{label}2:{label}{len(rows)}",
+                "majorDimension": "ROWS",
+                "values": [
+                    [checked(row[index]) if len(row) > index else False]
+                    for row in active_rows
+                ],
+            })
+    if value_updates:
+        service.spreadsheets().values().batchUpdate(
+            spreadsheetId=spreadsheet_id,
+            body={"valueInputOption": "RAW", "data": value_updates},
+        ).execute()
+
+    checkbox_rule = {
+        "condition": {"type": "BOOLEAN"},
+        "strict": True,
+        "showCustomUi": True,
+    }
+    validation_requests = [
+        {
+            "setDataValidation": {
+                    "range": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": 1,
+                        "endRowIndex": len(rows),
+                    "startColumnIndex": index,
+                    "endColumnIndex": index + 1,
+                },
+                "rule": checkbox_rule,
+                "filteredRowsIncluded": True,
+            }
+        }
+        for index in required_headers.values()
+    ]
+    service.spreadsheets().batchUpdate(
+        spreadsheetId=spreadsheet_id,
+        body={"requests": validation_requests},
+    ).execute()
+    return {
+        "approval_column": column_letter(EMAIL_APPROVED_COLUMN_INDEX),
+        "approval_checked": sum(
+            checked(row[EMAIL_APPROVED_COLUMN_INDEX])
+            for row in active_rows
+            if len(row) > EMAIL_APPROVED_COLUMN_INDEX
+        ),
+        "manual_sent_column": column_letter(EMAIL_MANUAL_SENT_COLUMN_INDEX),
+        "manual_sent_checked": sum(
+            checked(row[EMAIL_MANUAL_SENT_COLUMN_INDEX])
+            for row in active_rows
+            if len(row) > EMAIL_MANUAL_SENT_COLUMN_INDEX
+        ),
+        "validation_end_row": len(rows),
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--scratch-dir", type=Path, required=True)
@@ -405,6 +521,9 @@ def main() -> int:
     # write so the validation compares the complete reconstructed state.
     clear_snapshot(service, spreadsheet_id, list(expected))
     write_snapshot(service, spreadsheet_id, expected)
+    first_checkboxes = ensure_email_output_checkboxes(
+        service, spreadsheet_id, expected[EMAIL_OUTPUT_TAB]
+    )
     first_validation = validate_snapshot(service, spreadsheet_id, expected)
     first_formatting = ensure_email_sent_formatting(
         service,
@@ -414,6 +533,9 @@ def main() -> int:
 
     clear_snapshot(service, spreadsheet_id, list(expected))
     write_snapshot(service, spreadsheet_id, expected)
+    replay_checkboxes = ensure_email_output_checkboxes(
+        service, spreadsheet_id, expected[EMAIL_OUTPUT_TAB]
+    )
     replay_validation = validate_snapshot(service, spreadsheet_id, expected)
     replay_formatting = ensure_email_sent_formatting(
         service,
@@ -451,6 +573,8 @@ def main() -> int:
         "title": created.get("properties", {}).get("title", title),
         "initial_write": first_validation,
         "rollback_replay": replay_validation,
+        "initial_email_checkboxes": first_checkboxes,
+        "replay_email_checkboxes": replay_checkboxes,
         "initial_sent_conditional_formatting": first_formatting,
         "replay_sent_conditional_formatting": replay_formatting,
         "master_unique_ids": 169,
