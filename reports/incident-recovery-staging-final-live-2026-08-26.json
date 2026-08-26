@@ -1,0 +1,104 @@
+{
+  "active_brevo_message_ids": 13,
+  "active_email_status_counts": {
+    "ELKÜLDVE": 103,
+    "ELKÜLDÉS UTÁN MÓDOSULT": 1,
+    "KÉZBESÍTVE": 13,
+    "KÉZI ELBÍRÁLÁS": 19,
+    "KÜLDHETŐ": 33
+  },
+  "active_green_sent_rows": 117,
+  "active_manual_sent_markers": 105,
+  "email_approvals_enabled": 0,
+  "email_unique_send_keys": 169,
+  "incident_archive_rows": 305,
+  "initial_sent_conditional_formatting": {
+    "action": "updated",
+    "duplicate_rules_removed": 0,
+    "formula": "=OR(AND($N2<>\"\",$N2<>\"MANUÁLIS\",OR($M2=\"BREVO FOGADTA\",$M2=\"KÉZBESÍTVE\")),AND(OR($S2=TRUE,$S2=\"TRUE\",$S2=\"IGAZ\",$S2=\"IGEN\",$S2=1),OR($M2=\"ELKÜLDVE\",$M2=\"ELKÜLDÉS UTÁN MÓDOSULT\")))",
+    "range": "A2:AH1000"
+  },
+  "initial_write": {
+    " TAGOK I FÉLÉV": {
+      "rows_including_header": 170,
+      "semantic_sha256": "16a1a62d5a9354cd2b330ffd2c0d9d00d2927326b49afb01728c8b1454909ac9"
+    },
+    "Automata kalk": {
+      "rows_including_header": 137,
+      "semantic_sha256": "3f80c5271fd68379a8c21ff25b2d0bb441272c8208a3c726174de88a3773b166"
+    },
+    "E-mail beállítások": {
+      "rows_including_header": 22,
+      "semantic_sha256": "f96277da35e87a2359d6e0f1dfdd391be2027ff99ed75e42ca24105fa073ed38"
+    },
+    "E-mail eseménynapló": {
+      "rows_including_header": 47,
+      "semantic_sha256": "e7ec1c4ad717cee4da38b0d342448b5f47dd84212ca6fbc4f18e34f09a3d1fe4"
+    },
+    "E-mail kimenet": {
+      "rows_including_header": 170,
+      "semantic_sha256": "04567732dace7eb8b2b755fed51c0e159496ef8329160dc9ed68ab07e0736b4e"
+    },
+    "E-mail kimenet – incidensarchívum": {
+      "rows_including_header": 306,
+      "semantic_sha256": "6baac5896b64ec9499f1e005ac0b2bdcc02f4191bf8724e155f33cc5d2e72ca2"
+    },
+    "Kézi elbírálás teendők": {
+      "rows_including_header": 20,
+      "semantic_sha256": "0ebe11b16eac6fb9b59bb1281b7ee242a81a5220b69f2249e372323e80be59fd"
+    },
+    "Kézi küldés egyeztetés": {
+      "rows_including_header": 50,
+      "semantic_sha256": "8471f2260773b4732196ab7a09b090e14d6d06095f5282ee0794461f1c68e336"
+    }
+  },
+  "manual_action_rows": 19,
+  "manual_history_review_rows": 49,
+  "master_unique_ids": 169,
+  "mode": "isolated_staging_sheet",
+  "production_spreadsheet_untouched": true,
+  "real_email_send": false,
+  "replay_sent_conditional_formatting": {
+    "action": "updated",
+    "duplicate_rules_removed": 0,
+    "formula": "=OR(AND($N2<>\"\",$N2<>\"MANUÁLIS\",OR($M2=\"BREVO FOGADTA\",$M2=\"KÉZBESÍTVE\")),AND(OR($S2=TRUE,$S2=\"TRUE\",$S2=\"IGAZ\",$S2=\"IGEN\",$S2=1),OR($M2=\"ELKÜLDVE\",$M2=\"ELKÜLDÉS UTÁN MÓDOSULT\")))",
+    "range": "A2:AH1000"
+  },
+  "rollback_replay": {
+    " TAGOK I FÉLÉV": {
+      "rows_including_header": 170,
+      "semantic_sha256": "16a1a62d5a9354cd2b330ffd2c0d9d00d2927326b49afb01728c8b1454909ac9"
+    },
+    "Automata kalk": {
+      "rows_including_header": 137,
+      "semantic_sha256": "3f80c5271fd68379a8c21ff25b2d0bb441272c8208a3c726174de88a3773b166"
+    },
+    "E-mail beállítások": {
+      "rows_including_header": 22,
+      "semantic_sha256": "f96277da35e87a2359d6e0f1dfdd391be2027ff99ed75e42ca24105fa073ed38"
+    },
+    "E-mail eseménynapló": {
+      "rows_including_header": 47,
+      "semantic_sha256": "e7ec1c4ad717cee4da38b0d342448b5f47dd84212ca6fbc4f18e34f09a3d1fe4"
+    },
+    "E-mail kimenet": {
+      "rows_including_header": 170,
+      "semantic_sha256": "04567732dace7eb8b2b755fed51c0e159496ef8329160dc9ed68ab07e0736b4e"
+    },
+    "E-mail kimenet – incidensarchívum": {
+      "rows_including_header": 306,
+      "semantic_sha256": "6baac5896b64ec9499f1e005ac0b2bdcc02f4191bf8724e155f33cc5d2e72ca2"
+    },
+    "Kézi elbírálás teendők": {
+      "rows_including_header": 20,
+      "semantic_sha256": "0ebe11b16eac6fb9b59bb1281b7ee242a81a5220b69f2249e372323e80be59fd"
+    },
+    "Kézi küldés egyeztetés": {
+      "rows_including_header": 50,
+      "semantic_sha256": "8471f2260773b4732196ab7a09b090e14d6d06095f5282ee0794461f1c68e336"
+    }
+  },
+  "staging_spreadsheet_id": "1dNrM-YQpXW_KyxUqEaztZM3fVj7ILISkaBAHxh8u4RQ",
+  "staging_spreadsheet_url": "https://docs.google.com/spreadsheets/d/1dNrM-YQpXW_KyxUqEaztZM3fVj7ILISkaBAHxh8u4RQ/edit",
+  "title": "Budai Tánc – incidens helyreállítási próba 2026-08-26"
+}

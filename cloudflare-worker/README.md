@@ -169,9 +169,12 @@ munkalap-/oszlopstruktúrát szemlélteti.
 
 ## Díjszámítás és e-mail-piszkozatok
 
-A Worker az `Automata kalk` fül strukturált órarendjéből, díjsávjaiból és
-kivételeiből számol. Új webhook/CSV rekord után automatikusan frissíti a fő
-Sheet AH:AR automatizálási mezőit és az `E-mail kimenet` piszkozatát.
+A Worker a `Tanfolyamok` fül strukturált órarendjéből, díjsávjaiból és
+kivételeiből számol. Ez az egyetlen kézzel karbantartott tanfolyamforrás: egy
+heti alkalom egy sor, a többalkalmas tanfolyamok sorai ugyanazt a tanfolyamkulcsot
+használják. A rejtett `Automata kalk` fül csak automatikus kompatibilitási tükör,
+nem szerkesztendő. Új webhook/CSV rekord után a Worker automatikusan frissíti a
+fő Sheet AH:AR automatizálási mezőit és az `E-mail kimenet` piszkozatát.
 
 - A próbaóra díja fix 2600 Ft, és a `Próbaóra dátuma` szerinti órát ellenőrzi.
 - Tanfolyamnál a jelentkezés és a kért kezdés közül a későbbi naptól keresi az
@@ -186,6 +189,11 @@ Sheet AH:AR automatizálási mezőit és az `E-mail kimenet` piszkozatát.
   Szerkeszthető, de minden tartalmi/sablonparaméter-módosítás törli a korábbi
   jóváhagyást. Küldés csak a `Jóváhagyva` checkbox után,
   a `Budai Tánc → Jóváhagyott e-mailek küldése` menüből történik.
+- A küldés kizárólag a már jóváhagyott, meglévő sort küldi; nem frissít és nem
+  generál piszkozatot. A piszkozatfrissítés ettől külön művelet.
+- Egy jelentkezés–esemény–időszak küldési szándékhoz csak egy sor tartozhat.
+  Címzetteltérés, duplikált szándék vagy a segédnévmező és a kanonikus forrás
+  eltérése esetén a Worker nem ír új sort: `KÉZI ELBÍRÁLÁS` állapotban megáll.
 - A `Manuálisan elküldve` checkbox rögzíti a kézzel kiküldött levelet,
   időbélyeget és kezelőt ír, zöldre színezi a sort, és kizárja azt a Brevo
   küldési köréből. A jelölés visszavonásakor az előző státusz áll vissza.
@@ -197,6 +205,9 @@ Sheet AH:AR automatizálási mezőit és az `E-mail kimenet` piszkozatát.
 - A `BREVO FOGADTA` csak API-átvételt jelent. A `KÉZBESÍTVE` állapotot külön,
   titkos fejléccel védett Brevo webhook írja. A hard bounce, blokkolt,
   érvénytelen vagy letiltott cím a későbbi automatikus küldést is megállítja.
+- A webhook csak egyetlen, egyidejű `Brevo messageId` és címzett egyezésénél
+  frissít e-mail-sort. Hiányzó vagy többértelmű egyezésnél csak karanténos
+  eseménynapló-bejegyzést készít.
 - A Brevo kulcs kizárólag Worker secret lehet. A beszélgetésben vagy más
   nyilvános helyen megjelent kulcsot vissza kell vonni, és új kulcsot kell
   létrehozni.
@@ -312,6 +323,74 @@ a próbaóradátum mappelését, a 10 e-mail-forgatókönyvet, a revízióhoz k�
 jóváhagyást, az idempotens Brevo-kérést és a kézbesítési webhookot. Production smoke teszt esetén a
 `TEST-CODEX-20260723-001` és `TEST-WEBHOOK-001` azonosítókat a végén célzottan
 ellenőrizni és törölni kell.
+
+### Incidens forrásaudit (csak olvasás)
+
+Az alábbi parancs kizárólag kiolvassa a fő Sheetet, az `E-mail kimenet` és az
+`E-mail eseménynapló` lapot. Nem módosít Google Sheetet és nem küld e-mailt;
+a jelentésben csak sorszámok és bejegyzésazonosítók szerepelnek.
+
+```bash
+python3 scripts/audit_incident.py --output reports/incident-audit-YYYY-MM-DD.json
+```
+
+A teljes Gravity Forms-exporttal ugyanez a production díj- és e-mail-logikát
+is lefuttatja, és személyes adat nélküli helyreállítási besorolást tesz a
+riportba:
+
+```bash
+python3 scripts/audit_incident.py \
+  --gravity-csv /abszolút/út/gravity-forms-export.csv \
+  --output reports/incident-source-reconciliation-YYYY-MM-DD.json
+```
+
+### Fagyasztott helyreállítási csomag
+
+A csomagkészítő nem ír Google Sheetet és nem küld e-mailt. Két egymást
+követő, azonos read-only olvasásból készít snapshotot, majd létrehozza a
+kanonikus fő-Sheet- és E-mail-kimenet-rekonstrukciót. A személyes adatot
+tartalmazó CSV-k a gitignored `scratch/` alatt, csak a tulajdonos számára
+olvasható jogosultsággal készülnek; a `reports/` manifest nem tartalmaz nevet
+vagy e-mail-címet.
+
+```bash
+python3 scripts/build_recovery_bundle.py \
+  --gravity-csv /abszolút/út/gravity-forms-export.csv \
+  --scratch-dir scratch/incident-recovery-YYYY-MM-DD \
+  --manifest reports/incident-reconstruction-manifest-YYYY-MM-DD.json
+```
+
+Az idempotencia- és rollback-próbákat mindig a fagyasztott snapshoton kell
+futtatni, mert a Brevo webhook az operátori műveletektől függetlenül is
+érkezhet:
+
+```bash
+python3 scripts/build_recovery_bundle.py --offline \
+  --gravity-csv /abszolút/út/gravity-forms-export.csv \
+  --scratch-dir scratch/incident-recovery-YYYY-MM-DD \
+  --manifest reports/incident-reconstruction-manifest-YYYY-MM-DD.json
+```
+
+Az élő migrációhoz ez a csomag csak bemenet: automatikus éles írást
+szándékosan nem tartalmaz.
+
+Külön, service-account tulajdonú Google Sheet migrációs próba (az éles
+spreadsheetet nem írja, e-mailt nem küld):
+
+```bash
+python3 scripts/rehearse_recovery_sheet.py \
+  --scratch-dir scratch/incident-recovery-YYYY-MM-DD \
+  --report reports/incident-sheet-rehearsal-YYYY-MM-DD.json \
+  --create-staging-sheet
+```
+
+Ha a service account nem hozhat létre saját fájlt, előbb készíts Drive-másolatot
+az éles spreadsheetből, oszd meg a service accounttal szerkesztőként, majd a
+fenti utolsó kapcsoló helyett add meg a másolat azonosítóját:
+
+```bash
+--staging-spreadsheet-id GOOGLE_SHEET_COPY_ID
+```
 
 ## Új űrlap / új folyamat
 

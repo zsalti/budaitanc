@@ -1,0 +1,1472 @@
+{
+  "approved_source_override_approval_id": "user-confirmation-2026-08-26-live-values-1923-1932",
+  "approved_source_overrides": [
+    {
+      "changed_source_fields": [
+        "Gravity Forms tanfolyamérték",
+        "Nap és terem",
+        "Óra ideje",
+        "Jelentkező (növendék) neve",
+        "Jelentkezés ideje",
+        "Tanfolyamon részvétel kezdete / naptár",
+        "Próbaórára jelentkezés",
+        "I. féléves tandíj",
+        "Egyéb megjegyzés",
+        "Más óraszámban jár",
+        "Születési dátum",
+        "Lakcím",
+        "Telefon",
+        "E-mail cím",
+        "Törvényes képviselő, szülő neve",
+        "Testvér neve",
+        "Testvér csoportja"
+      ],
+      "entry_id": "1923",
+      "live_master_row": 137,
+      "mode": "approved_full_live_source_row"
+    },
+    {
+      "changed_source_fields": [
+        "Gravity Forms tanfolyamérték",
+        "Nap és terem",
+        "Óra ideje",
+        "Tanfolyam neve",
+        "Jelentkező (növendék) neve",
+        "Jelentkezés ideje",
+        "I. féléves tandíj",
+        "Születési dátum",
+        "Lakcím",
+        "Telefon",
+        "E-mail cím",
+        "Törvényes képviselő, szülő neve",
+        "Kerület Kártya száma",
+        "Kerület Kártya lejárati dátuma",
+        "Kerület Kártya fotója",
+        "Számlázási adatok",
+        "Számlázási email"
+      ],
+      "entry_id": "1932",
+      "live_master_row": 149,
+      "mode": "approved_full_live_source_row"
+    }
+  ],
+  "calculated_email_output_before_history": {
+    "approved": 0,
+    "duplicate_send_keys": 0,
+    "manual_review": 27,
+    "send_ready": 142,
+    "total": 169
+  },
+  "current_email_event_rows": 46,
+  "current_email_output_rows": 305,
+  "current_master_rows": 162,
+  "derived_columns_cleared": [
+    "Első látogatható óra",
+    "Félév",
+    "Díjsáv",
+    "Díjkategória",
+    "Kedvezmény",
+    "Automatizálási státusz",
+    "Kézi elbírálás oka",
+    "Forrás hash",
+    "Sablonverzió",
+    "Utolsó feldolgozás",
+    "E-mail kapcsolattartó keresztnév",
+    "E-mail növendék keresztnév"
+  ],
+  "files": {
+    "approved_source_overrides": {
+      "filename": "approved-source-overrides.csv",
+      "sha256": "c1b678b41a5d872584078f20b549592c3ef2546c7c4f2c2acdc0b395c9e5c738"
+    },
+    "automation_config": {
+      "filename": "automation-config.csv",
+      "sha256": "b11a3050ef4de236fa4269ebde01a1127e2a89dfdeb742ad725faeff6e699a3a"
+    },
+    "email_event_archive": {
+      "filename": "email-event-archive.csv",
+      "sha256": "15c3e77fcdfb6c2ee9f07574b828e3e154f3e540d6468edcc933863e2e930754"
+    },
+    "email_manual_action_queue": {
+      "filename": "email-manual-action-queue.csv",
+      "sha256": "f76eddddd8439dcd455b4d8d3081f65ceb1a4eab7b9421b2bd6682a4c1e6c72f"
+    },
+    "email_manual_history_review": {
+      "filename": "email-manual-history-review.csv",
+      "sha256": "833345426971f46a0c3cebca7264cbc9512be85a20b40933795fd9f34336fdb3"
+    },
+    "email_output_archive": {
+      "filename": "email-output-archive.csv",
+      "sha256": "6dfb0d35d2c35e1369ca64153a8ea07da90cbc3b46192460461f00e4cb8d9ce4"
+    },
+    "email_output_incident_archive": {
+      "filename": "email-output-incident-archive.csv",
+      "sha256": "3afbc4125ec27ced289929b5557d9729ed2311a10e317782b2312c567cc96662"
+    },
+    "email_output_reconstruction": {
+      "filename": "email-output-reconstruction.csv",
+      "sha256": "5861c1c6566b6faba3e6a0b5bf0fd264a1068c335e30b34383e431e84750c3d7"
+    },
+    "email_settings": {
+      "filename": "email-settings.csv",
+      "sha256": "77d38eb0e8f95faee34dc9bcaa424e2cb93d2b390ceab51d12fe27682db4853e"
+    },
+    "master_before": {
+      "filename": "master-before.csv",
+      "sha256": "219af4334ca0ebff0672bf117cf46784cbf4ebf4256bde19566c95d49c2b50e3"
+    },
+    "master_reconstruction": {
+      "filename": "master-reconstruction.csv",
+      "sha256": "0875f182da2d59dc8fb63278f6428d46529450dcacb6ce3a51f66b7400255e89"
+    }
+  },
+  "manual_action_rows": 19,
+  "manual_field_transfer_rows": 13,
+  "manual_transfer_columns": [
+    "I. féléves tandíj",
+    "I. féléves tandíjfizetés dátuma",
+    "I. tagsági kiállítva",
+    "Egyéb megjegyzés",
+    "Más óraszámban jár",
+    "Egyéb pénügyi ",
+    "II. féléves tandíj",
+    "II. féléves tandíj befizetés dátuma",
+    "II. féléves tandíjértesítő",
+    "Számlázási adatok",
+    "Számlázási email"
+  ],
+  "manual_transfer_quarantine": [
+    {
+      "current_master_rows": [
+        33
+      ],
+      "entry_id": "1737",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 2
+    },
+    {
+      "current_master_rows": [
+        32
+      ],
+      "entry_id": "1739",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 3
+    },
+    {
+      "current_master_rows": [
+        31
+      ],
+      "entry_id": "1740",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 4
+    },
+    {
+      "current_master_rows": [
+        30
+      ],
+      "entry_id": "1743",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 5
+    },
+    {
+      "current_master_rows": [],
+      "entry_id": "1747",
+      "reason": "missing_from_current_master",
+      "source_row": 6
+    },
+    {
+      "current_master_rows": [
+        28
+      ],
+      "entry_id": "1749",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 7
+    },
+    {
+      "current_master_rows": [],
+      "entry_id": "1755",
+      "reason": "missing_from_current_master",
+      "source_row": 8
+    },
+    {
+      "current_master_rows": [
+        10
+      ],
+      "entry_id": "1760",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 9
+    },
+    {
+      "current_master_rows": [],
+      "entry_id": "1768",
+      "reason": "missing_from_current_master",
+      "source_row": 10
+    },
+    {
+      "current_master_rows": [],
+      "entry_id": "1769",
+      "reason": "missing_from_current_master",
+      "source_row": 11
+    },
+    {
+      "current_master_rows": [
+        6
+      ],
+      "entry_id": "1770",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 12
+    },
+    {
+      "current_master_rows": [
+        17
+      ],
+      "entry_id": "1771",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 13
+    },
+    {
+      "current_master_rows": [
+        2
+      ],
+      "entry_id": "1772",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 14
+    },
+    {
+      "current_master_rows": [],
+      "entry_id": "1773",
+      "reason": "missing_from_current_master",
+      "source_row": 15
+    },
+    {
+      "current_master_rows": [],
+      "entry_id": "1774",
+      "reason": "missing_from_current_master",
+      "source_row": 16
+    },
+    {
+      "current_master_rows": [],
+      "entry_id": "1775",
+      "reason": "missing_from_current_master",
+      "source_row": 17
+    },
+    {
+      "current_master_rows": [],
+      "entry_id": "1776",
+      "reason": "missing_from_current_master",
+      "source_row": 18
+    },
+    {
+      "current_master_rows": [
+        13
+      ],
+      "entry_id": "1777",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 19
+    },
+    {
+      "current_master_rows": [
+        12
+      ],
+      "entry_id": "1781",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 20
+    },
+    {
+      "current_master_rows": [],
+      "entry_id": "1782",
+      "reason": "missing_from_current_master",
+      "source_row": 21
+    },
+    {
+      "current_master_rows": [
+        7
+      ],
+      "entry_id": "1784",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 22
+    },
+    {
+      "current_master_rows": [
+        14
+      ],
+      "entry_id": "1785",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 23
+    },
+    {
+      "current_master_rows": [
+        5
+      ],
+      "entry_id": "1786",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 24
+    },
+    {
+      "current_master_rows": [
+        4
+      ],
+      "entry_id": "1790",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 25
+    },
+    {
+      "current_master_rows": [
+        3
+      ],
+      "entry_id": "1791",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 26
+    },
+    {
+      "current_master_rows": [
+        8
+      ],
+      "entry_id": "1792",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 27
+    },
+    {
+      "current_master_rows": [
+        15
+      ],
+      "entry_id": "1793",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 28
+    },
+    {
+      "current_master_rows": [
+        26
+      ],
+      "entry_id": "1794",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 29
+    },
+    {
+      "current_master_rows": [],
+      "entry_id": "1795",
+      "reason": "missing_from_current_master",
+      "source_row": 30
+    },
+    {
+      "current_master_rows": [
+        25
+      ],
+      "entry_id": "1798",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 31
+    },
+    {
+      "current_master_rows": [
+        24
+      ],
+      "entry_id": "1799",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 32
+    },
+    {
+      "current_master_rows": [],
+      "entry_id": "1800",
+      "reason": "missing_from_current_master",
+      "source_row": 33
+    },
+    {
+      "current_master_rows": [
+        20
+      ],
+      "entry_id": "1801",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 34
+    },
+    {
+      "current_master_rows": [
+        19
+      ],
+      "entry_id": "1802",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 35
+    },
+    {
+      "current_master_rows": [
+        21
+      ],
+      "entry_id": "1803",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 36
+    },
+    {
+      "current_master_rows": [],
+      "entry_id": "1804",
+      "reason": "missing_from_current_master",
+      "source_row": 37
+    },
+    {
+      "current_master_rows": [
+        42
+      ],
+      "entry_id": "1805",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 38
+    },
+    {
+      "current_master_rows": [
+        40,
+        41
+      ],
+      "entry_id": "1806",
+      "reason": "duplicate_current_master_id",
+      "source_row": 39
+    },
+    {
+      "current_master_rows": [
+        27
+      ],
+      "entry_id": "1807",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 40
+    },
+    {
+      "current_master_rows": [
+        39
+      ],
+      "entry_id": "1808",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 41
+    },
+    {
+      "current_master_rows": [],
+      "entry_id": "1810",
+      "reason": "missing_from_current_master",
+      "source_row": 42
+    },
+    {
+      "current_master_rows": [
+        16,
+        37
+      ],
+      "entry_id": "1813",
+      "reason": "duplicate_current_master_id",
+      "source_row": 44
+    },
+    {
+      "current_master_rows": [
+        11,
+        36
+      ],
+      "entry_id": "1814",
+      "reason": "duplicate_current_master_id",
+      "source_row": 45
+    },
+    {
+      "current_master_rows": [
+        35
+      ],
+      "entry_id": "1815",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 46
+    },
+    {
+      "current_master_rows": [
+        34
+      ],
+      "entry_id": "1816",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 47
+    },
+    {
+      "current_master_rows": [
+        9,
+        44
+      ],
+      "entry_id": "1817",
+      "reason": "duplicate_current_master_id",
+      "source_row": 48
+    },
+    {
+      "current_master_rows": [
+        18,
+        43
+      ],
+      "entry_id": "1818",
+      "reason": "duplicate_current_master_id",
+      "source_row": 49
+    },
+    {
+      "current_master_rows": [
+        23,
+        47
+      ],
+      "entry_id": "1819",
+      "reason": "duplicate_current_master_id",
+      "source_row": 50
+    },
+    {
+      "current_master_rows": [
+        22,
+        46
+      ],
+      "entry_id": "1820",
+      "reason": "duplicate_current_master_id",
+      "source_row": 51
+    },
+    {
+      "current_master_rows": [
+        29,
+        45
+      ],
+      "entry_id": "1821",
+      "reason": "duplicate_current_master_id",
+      "source_row": 52
+    },
+    {
+      "current_master_rows": [
+        49
+      ],
+      "entry_id": "1823",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 53
+    },
+    {
+      "current_master_rows": [
+        48
+      ],
+      "entry_id": "1824",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 54
+    },
+    {
+      "current_master_rows": [
+        51
+      ],
+      "entry_id": "1825",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 55
+    },
+    {
+      "current_master_rows": [
+        50
+      ],
+      "entry_id": "1826",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 56
+    },
+    {
+      "current_master_rows": [
+        52
+      ],
+      "entry_id": "1828",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 57
+    },
+    {
+      "current_master_rows": [
+        56
+      ],
+      "entry_id": "1829",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 58
+    },
+    {
+      "current_master_rows": [
+        55
+      ],
+      "entry_id": "1830",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 59
+    },
+    {
+      "current_master_rows": [
+        54
+      ],
+      "entry_id": "1831",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 60
+    },
+    {
+      "current_master_rows": [
+        53
+      ],
+      "entry_id": "1832",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 61
+    },
+    {
+      "current_master_rows": [
+        57
+      ],
+      "entry_id": "1833",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 62
+    },
+    {
+      "current_master_rows": [
+        67
+      ],
+      "entry_id": "1834",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 63
+    },
+    {
+      "current_master_rows": [
+        66
+      ],
+      "entry_id": "1835",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 64
+    },
+    {
+      "current_master_rows": [
+        65
+      ],
+      "entry_id": "1836",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 65
+    },
+    {
+      "current_master_rows": [
+        64
+      ],
+      "entry_id": "1837",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 66
+    },
+    {
+      "current_master_rows": [
+        63
+      ],
+      "entry_id": "1838",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 67
+    },
+    {
+      "current_master_rows": [
+        62
+      ],
+      "entry_id": "1840",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 68
+    },
+    {
+      "current_master_rows": [
+        61
+      ],
+      "entry_id": "1841",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 69
+    },
+    {
+      "current_master_rows": [
+        60
+      ],
+      "entry_id": "1842",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 70
+    },
+    {
+      "current_master_rows": [],
+      "entry_id": "1843",
+      "reason": "missing_from_current_master",
+      "source_row": 71
+    },
+    {
+      "current_master_rows": [
+        59
+      ],
+      "entry_id": "1844",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 72
+    },
+    {
+      "current_master_rows": [
+        58
+      ],
+      "entry_id": "1845",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 73
+    },
+    {
+      "current_master_rows": [
+        76
+      ],
+      "entry_id": "1846",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 74
+    },
+    {
+      "current_master_rows": [
+        75
+      ],
+      "entry_id": "1847",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 75
+    },
+    {
+      "current_master_rows": [
+        74
+      ],
+      "entry_id": "1849",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 76
+    },
+    {
+      "current_master_rows": [
+        73
+      ],
+      "entry_id": "1850",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 77
+    },
+    {
+      "current_master_rows": [
+        71
+      ],
+      "entry_id": "1852",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 79
+    },
+    {
+      "current_master_rows": [
+        70
+      ],
+      "entry_id": "1853",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 80
+    },
+    {
+      "current_master_rows": [
+        69
+      ],
+      "entry_id": "1854",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 81
+    },
+    {
+      "current_master_rows": [
+        68
+      ],
+      "entry_id": "1855",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 82
+    },
+    {
+      "current_master_rows": [
+        85
+      ],
+      "entry_id": "1856",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 83
+    },
+    {
+      "current_master_rows": [
+        84
+      ],
+      "entry_id": "1857",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 84
+    },
+    {
+      "current_master_rows": [
+        83
+      ],
+      "entry_id": "1859",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 85
+    },
+    {
+      "current_master_rows": [
+        82
+      ],
+      "entry_id": "1860",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 86
+    },
+    {
+      "current_master_rows": [
+        80
+      ],
+      "entry_id": "1862",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 88
+    },
+    {
+      "current_master_rows": [
+        79
+      ],
+      "entry_id": "1863",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 89
+    },
+    {
+      "current_master_rows": [
+        78
+      ],
+      "entry_id": "1864",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 90
+    },
+    {
+      "current_master_rows": [
+        77
+      ],
+      "entry_id": "1865",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 91
+    },
+    {
+      "current_master_rows": [
+        94
+      ],
+      "entry_id": "1866",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 92
+    },
+    {
+      "current_master_rows": [
+        93
+      ],
+      "entry_id": "1867",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 93
+    },
+    {
+      "current_master_rows": [
+        92
+      ],
+      "entry_id": "1868",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 94
+    },
+    {
+      "current_master_rows": [
+        91
+      ],
+      "entry_id": "1870",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 95
+    },
+    {
+      "current_master_rows": [
+        89
+      ],
+      "entry_id": "1872",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 97
+    },
+    {
+      "current_master_rows": [
+        88
+      ],
+      "entry_id": "1873",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 98
+    },
+    {
+      "current_master_rows": [
+        87
+      ],
+      "entry_id": "1874",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 99
+    },
+    {
+      "current_master_rows": [
+        86
+      ],
+      "entry_id": "1875",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 100
+    },
+    {
+      "current_master_rows": [
+        98
+      ],
+      "entry_id": "1879",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 101
+    },
+    {
+      "current_master_rows": [
+        97
+      ],
+      "entry_id": "1880",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 102
+    },
+    {
+      "current_master_rows": [
+        96
+      ],
+      "entry_id": "1881",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 103
+    },
+    {
+      "current_master_rows": [
+        95
+      ],
+      "entry_id": "1882",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 104
+    },
+    {
+      "current_master_rows": [
+        101
+      ],
+      "entry_id": "1883",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 105
+    },
+    {
+      "current_master_rows": [
+        99
+      ],
+      "entry_id": "1885",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 107
+    },
+    {
+      "current_master_rows": [
+        103
+      ],
+      "entry_id": "1886",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 108
+    },
+    {
+      "current_master_rows": [
+        102
+      ],
+      "entry_id": "1887",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 109
+    },
+    {
+      "current_master_rows": [
+        107
+      ],
+      "entry_id": "1888",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 110
+    },
+    {
+      "current_master_rows": [
+        106
+      ],
+      "entry_id": "1889",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 111
+    },
+    {
+      "current_master_rows": [
+        105
+      ],
+      "entry_id": "1890",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 112
+    },
+    {
+      "current_master_rows": [
+        104
+      ],
+      "entry_id": "1891",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 113
+    },
+    {
+      "current_master_rows": [
+        112
+      ],
+      "entry_id": "1892",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 114
+    },
+    {
+      "current_master_rows": [
+        111
+      ],
+      "entry_id": "1893",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 115
+    },
+    {
+      "current_master_rows": [
+        109
+      ],
+      "entry_id": "1895",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 117
+    },
+    {
+      "current_master_rows": [
+        108
+      ],
+      "entry_id": "1896",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 118
+    },
+    {
+      "current_master_rows": [
+        115
+      ],
+      "entry_id": "1897",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 119
+    },
+    {
+      "current_master_rows": [
+        113
+      ],
+      "entry_id": "1899",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 121
+    },
+    {
+      "current_master_rows": [
+        118
+      ],
+      "entry_id": "1900",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 122
+    },
+    {
+      "current_master_rows": [
+        116
+      ],
+      "entry_id": "1902",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 124
+    },
+    {
+      "current_master_rows": [
+        127
+      ],
+      "entry_id": "1903",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 125
+    },
+    {
+      "current_master_rows": [
+        126
+      ],
+      "entry_id": "1904",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 126
+    },
+    {
+      "current_master_rows": [
+        125
+      ],
+      "entry_id": "1905",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 127
+    },
+    {
+      "current_master_rows": [
+        124
+      ],
+      "entry_id": "1906",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 128
+    },
+    {
+      "current_master_rows": [
+        122
+      ],
+      "entry_id": "1908",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 130
+    },
+    {
+      "current_master_rows": [
+        121
+      ],
+      "entry_id": "1909",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 131
+    },
+    {
+      "current_master_rows": [
+        120
+      ],
+      "entry_id": "1910",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 132
+    },
+    {
+      "current_master_rows": [
+        119
+      ],
+      "entry_id": "1911",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 133
+    },
+    {
+      "current_master_rows": [
+        129
+      ],
+      "entry_id": "1912",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 134
+    },
+    {
+      "current_master_rows": [
+        128
+      ],
+      "entry_id": "1913",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 135
+    },
+    {
+      "current_master_rows": [
+        146
+      ],
+      "entry_id": "1914",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 136
+    },
+    {
+      "current_master_rows": [
+        145
+      ],
+      "entry_id": "1915",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 137
+    },
+    {
+      "current_master_rows": [
+        144
+      ],
+      "entry_id": "1916",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 138
+    },
+    {
+      "current_master_rows": [
+        143
+      ],
+      "entry_id": "1917",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 139
+    },
+    {
+      "current_master_rows": [
+        142
+      ],
+      "entry_id": "1918",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 140
+    },
+    {
+      "current_master_rows": [
+        141
+      ],
+      "entry_id": "1919",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 141
+    },
+    {
+      "current_master_rows": [
+        140
+      ],
+      "entry_id": "1920",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 142
+    },
+    {
+      "current_master_rows": [
+        139
+      ],
+      "entry_id": "1921",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 143
+    },
+    {
+      "current_master_rows": [
+        136
+      ],
+      "entry_id": "1924",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 146
+    },
+    {
+      "current_master_rows": [
+        135
+      ],
+      "entry_id": "1925",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 147
+    },
+    {
+      "current_master_rows": [
+        134
+      ],
+      "entry_id": "1926",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 148
+    },
+    {
+      "current_master_rows": [
+        133
+      ],
+      "entry_id": "1927",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 149
+    },
+    {
+      "current_master_rows": [
+        132
+      ],
+      "entry_id": "1928",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 150
+    },
+    {
+      "current_master_rows": [
+        131
+      ],
+      "entry_id": "1929",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 151
+    },
+    {
+      "current_master_rows": [
+        130
+      ],
+      "entry_id": "1930",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 152
+    },
+    {
+      "current_master_rows": [
+        150
+      ],
+      "entry_id": "1931",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 153
+    },
+    {
+      "current_master_rows": [
+        148
+      ],
+      "entry_id": "1933",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 155
+    },
+    {
+      "current_master_rows": [
+        147
+      ],
+      "entry_id": "1934",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 156
+    },
+    {
+      "current_master_rows": [
+        163
+      ],
+      "entry_id": "1935",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 157
+    },
+    {
+      "current_master_rows": [],
+      "entry_id": "1936",
+      "reason": "missing_from_current_master",
+      "source_row": 158
+    },
+    {
+      "current_master_rows": [
+        162
+      ],
+      "entry_id": "1938",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 159
+    },
+    {
+      "current_master_rows": [
+        161
+      ],
+      "entry_id": "1939",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 160
+    },
+    {
+      "current_master_rows": [
+        160
+      ],
+      "entry_id": "1940",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 161
+    },
+    {
+      "current_master_rows": [
+        159
+      ],
+      "entry_id": "1941",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 162
+    },
+    {
+      "current_master_rows": [
+        158
+      ],
+      "entry_id": "1942",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 163
+    },
+    {
+      "current_master_rows": [
+        156
+      ],
+      "entry_id": "1944",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 165
+    },
+    {
+      "current_master_rows": [
+        155
+      ],
+      "entry_id": "1945",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 166
+    },
+    {
+      "current_master_rows": [
+        154
+      ],
+      "entry_id": "1946",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 167
+    },
+    {
+      "current_master_rows": [
+        153
+      ],
+      "entry_id": "1947",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 168
+    },
+    {
+      "current_master_rows": [
+        152
+      ],
+      "entry_id": "1948",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 169
+    },
+    {
+      "current_master_rows": [
+        151
+      ],
+      "entry_id": "1949",
+      "reason": "canonical_fields_mismatch",
+      "source_row": 170
+    }
+  ],
+  "manual_transfers": [
+    {
+      "entry_id": "1812",
+      "master_row": 38,
+      "source_row": 43
+    },
+    {
+      "entry_id": "1851",
+      "master_row": 72,
+      "source_row": 78
+    },
+    {
+      "entry_id": "1861",
+      "master_row": 81,
+      "source_row": 87
+    },
+    {
+      "entry_id": "1871",
+      "master_row": 90,
+      "source_row": 96
+    },
+    {
+      "entry_id": "1884",
+      "master_row": 100,
+      "source_row": 106
+    },
+    {
+      "entry_id": "1894",
+      "master_row": 110,
+      "source_row": 116
+    },
+    {
+      "entry_id": "1898",
+      "master_row": 114,
+      "source_row": 120
+    },
+    {
+      "entry_id": "1901",
+      "master_row": 117,
+      "source_row": 123
+    },
+    {
+      "entry_id": "1907",
+      "master_row": 123,
+      "source_row": 129
+    },
+    {
+      "entry_id": "1922",
+      "master_row": 138,
+      "source_row": 144
+    },
+    {
+      "entry_id": "1923",
+      "master_row": 137,
+      "source_row": 145
+    },
+    {
+      "entry_id": "1932",
+      "master_row": 149,
+      "source_row": 154
+    },
+    {
+      "entry_id": "1943",
+      "master_row": 157,
+      "source_row": 164
+    }
+  ],
+  "mode": "read_only",
+  "quarantine_reason_counts": {
+    "canonical_fields_mismatch": 133,
+    "duplicate_current_master_id": 8,
+    "missing_from_current_master": 15
+  },
+  "quarantined_manual_transfer_rows": 156,
+  "reconstructed_email_output": {
+    "approved": 0,
+    "brevo_and_manual_overlap": 1,
+    "brevo_control_test_message_ids": 10,
+    "brevo_event_message_ids": 23,
+    "brevo_sent_transferred": 13,
+    "brevo_unresolved_message_ids": 0,
+    "calculated_manual_review_before_history": 27,
+    "calculated_send_ready_before_history": 142,
+    "duplicate_send_keys": 0,
+    "historically_sent_current_intents": 117,
+    "manual_evidence_review_rows": 49,
+    "manual_marked_archive_rows": 154,
+    "manual_review_remaining": 19,
+    "manual_sent_transferred": 105,
+    "send_ready_remaining": 33,
+    "status_counts": {
+      "ELKÜLDVE": 103,
+      "ELKÜLDÉS UTÁN MÓDOSULT": 1,
+      "KÉZBESÍTVE": 13,
+      "KÉZI ELBÍRÁLÁS": 19,
+      "KÜLDHETŐ": 33
+    },
+    "total": 169
+  },
+  "reconstructed_master_rows": 169,
+  "snapshot_mode": "offline_replay",
+  "source_export": {
+    "filename": "tánctanfolyam-jelentkezés-2026-08-26.csv",
+    "sha256": "7d75a0562779e3eba03f373ac3eecc09fa5128881b35a412525f16ffc6f2eb5d"
+  },
+  "source_records": 169
+}

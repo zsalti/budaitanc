@@ -3,6 +3,32 @@ const WEEKDAYS = new Map([
   ["CSUTORTOK", 4], ["PENTEK", 5], ["SZOMBAT", 6],
 ]);
 
+// Gravity Forms values from the live 2026 registration export contain a
+// handful of historical display names while the central Tanfolyamok tab uses the current
+// timetable names. These are explicit business aliases, not fuzzy matches.
+// The selected day/time is still checked separately, so a stale or conflicting
+// timetable row cannot silently supply the wrong first class.
+const COURSE_NAME_ALIASES = [
+  ["JAZZ BALETT IFJÚSÁGI-FELNŐTT 15 ÉVES KORTÓL", "JAZZ TÁNC IFJÚSÁGI-FELNŐTT 15 ÉVES KORTÓL"],
+  ["KLASSZIKUS BALETT ISKOLÁS ALSÓ TAGOZAT", "KLASSZIKUS BALETT ISKOLÁS ALSÓ TAGOZATOS"],
+  ["KLASSZIKUS BALETT ISKOLÁS FELSŐ TAGOZAT", "ISKOLÁS FELSŐ TAGOZATOS"],
+  ["KLASSZIKUS-MODERN BALETTHALADÓ KÖZÉPISKOLÁS ÉS FELNŐTT", "HALADÓ KLASSZIKUS-MODERN BALETT KÖZÉPISKOLÁS ÉS FELNŐTT 14+"],
+  ["KLASSZIKUS BALETT SPICCTECHNIKA KÖZÉPISKOLÁS ÉS FELNŐTT", "KLASSZIKUS BALETT SPICCTECHNIKA KÖZÉPISKOLÁS ÉS FELNŐTT 14+"],
+  ["KLASSZIKUS BALETT KEZDŐ ÉS ÚJRAKEZDŐ KÖZÉPISKOLÁS ÉS FELNŐTT 14+", "KEZDŐ ÉS ÚJRAKEZDŐ KLASSZIKUS BALETT KÖZÉPISKOLÁS ÉS FELNŐTT 14+"],
+  ["KORTÁRS TÁNCMŰHELY HALADÓ 14+", "KORTÁRS TÁNCMŰHELY HALADÓ 14-20 ÉVESEK"],
+  ["MODERN TÁNC 12-15 ÉVES", "MODERN TÁNC 10-14 ÉVES"],
+  ["MŰVÉSZI TORNA ÓVODÁS KEZDŐ 4+", "MŰVÉSZI TORNA ÓVODÁS KEZDŐ 4-5 ÉVESEK"],
+  ["MŰVÉSZI TORNA HALADÓ ÓVODÁS 5-7 ÉVESEK", "MŰVÉSZI TORNA 5-7 ÉVESEK HALADÓ"],
+  ["MŰV SZI TORNA HALADÓ ÓVODÁS 5-7 ÉVESEK", "MŰVÉSZI TORNA 5-7 ÉVESEK HALADÓ"],
+  ["MŰVÉSZI TORNA ISKOLÁS 1. ISKOLA ALSÓ TAGOZAT, 6-7 ÉVESEK", "MŰVÉSZI TORNA KISISKOLÁS 1. (6-7 ÉVESEK)"],
+  ["MŰVÉSZI ISKOLÁS 2. HALADÓ ALSÓ TAGOZAT 8-9 ÉVESEK", "MŰVÉSZI TORNA ISKOLÁS 2. HALADÓ (ALSÓ TAGOZAT)"],
+  ["MŰVÉSZI TORNA HALADÓ IFJÚSÁGI ÉS FELNŐTT", "MŰVÉSZI TORNA IFJÚSÁGI ÉS FELNŐTT"],
+  ["NÉPTÁNC ÓVODÁS 4+", "NÉPTÁNC ÓVODÁS"],
+  ["MŰVÉSZI TORNA HALADÓ ÓVODÁS 5-6 ÉVESEK", "MŰVÉSZI TORNA ÓVODÁS 5-6 ÉVESEK"],
+  ["MŰVÉSZI TORNA ÓVODÁS 4+", "MŰVÉSZI TORNA ÓVODÁS 4 ÉVESEK"],
+  ["KLASSZIKUS BALETT GYERMEK 6-8 ÉVESEK", "KLASSZIKUS BALETT ÓVODÁS 4,5 ÉVES KORTÓL"],
+];
+
 export const AUTOMATION_STATUS = Object.freeze({
   READY: "KÜLDHETŐ",
   APPROVED: "JÓVÁHAGYVA",
@@ -80,14 +106,14 @@ export function parseAutomationConfig(rows) {
 export function calculateRegistration(registration, config) {
   const courseRaw = text(registration.courseRaw);
   const courseKey = normalizeCourseKey(courseRaw.split("/")[0] || courseRaw);
+  const isTrial = normalizeKey(registration.trialSignup) === "IGEN";
   const manualReason = preflightManualReason(registration, courseKey);
-  if (manualReason) return manual(manualReason, { courseKey });
+  if (manualReason) return manual(manualReason, { courseKey, isTrial });
 
   const sessions = matchingSessions(courseRaw, courseKey, config.courses);
-  if (!sessions.length) return manual("Ismeretlen tanfolyam vagy hiányzó órarend.", { courseKey });
-  if (sessions.some((session) => session.manual)) return manual("A tanfolyam kézi elbírálásra van jelölve.", { courseKey });
+  if (!sessions.length) return manual("Ismeretlen tanfolyam vagy hiányzó órarend.", { courseKey, isTrial });
+  if (sessions.some((session) => session.manual)) return manual("A tanfolyam kézi elbírálásra van jelölve.", { courseKey, isTrial });
 
-  const isTrial = normalizeKey(registration.trialSignup) === "IGEN";
   let firstClass;
   if (isTrial) {
     const trialDate = parseDate(registration.trialDate);
@@ -112,7 +138,7 @@ export function calculateRegistration(registration, config) {
 
   const semester = semesterForDate(firstClass.date);
   if (!semester) return manual("Az első óra nem tartozik felvételi időszakhoz.", { courseKey, firstClass });
-  const category = uniqueCategory(sessions);
+  const category = uniqueCategory(sessions, courseRaw);
   if (!category) return manual("A tanfolyam díjkategóriája nem egyértelmű.", { courseKey, firstClass, semester });
   const band = config.fees.find((fee) => fee.semester === semester && fee.category === category && firstClass.date >= fee.start && firstClass.date <= fee.end);
   if (!band) return manual("Nem található díjsáv az első óra dátumához.", { courseKey, firstClass, semester, feeCategory: category });
@@ -140,19 +166,53 @@ function preflightManualReason(registration, courseKey) {
 function matchingSessions(courseRaw, courseKey, courses) {
   const rawKey = normalizeKey(courseRaw);
   const exactRaw = courses.filter((course) => course.rawKey && course.rawKey === rawKey);
-  if (exactRaw.length) return exactRaw;
+  if (exactRaw.length) return sessionsNamedInRegistration(courseRaw, exactRaw);
   const exactCourse = courses.filter((course) => course.key === courseKey);
-  if (exactCourse.length) return exactCourse;
+  if (exactCourse.length) return sessionsNamedInRegistration(courseRaw, exactCourse);
   const aliases = courseAliases(courseKey);
-  return courses.filter((course) => aliases.includes(course.key));
+  const aliasMatches = courses.filter((course) => aliases.includes(course.key));
+  if (aliasMatches.length) return sessionsNamedInRegistration(courseRaw, aliasMatches);
+
+  // Gravity Forms sometimes uses the singular "éves", while the schedule
+  // uses "évesek" for the same age group. Match that harmless wording
+  // difference, then use the day/time from the selected course to avoid
+  // mixing a one- and a two-session option with a similar title.
+  const identity = courseIdentityKey(courseKey);
+  const identityMatches = courses.filter((course) => courseIdentityKey(course.key) === identity);
+  return sessionsNamedInRegistration(courseRaw, identityMatches);
+}
+
+function courseIdentityKey(value) {
+  return normalizeCourseKey(value)
+    .replace(/\bEVESEK\b/g, "EVES")
+    .replace(/\bEVES KORTOL\b/g, "EVES");
+}
+
+function sessionsNamedInRegistration(courseRaw, sessions) {
+  const rawKey = normalizeKey(courseRaw);
+  const scheduleKey = rawKey.replace(/[,+]/g, " ").replace(/\s+/g, " ");
+  const times = new Set((text(courseRaw).match(/\d{1,2}[.:]\d{2}/g) || []).map(normalizeTime));
+  const containsWeekday = [...WEEKDAYS.keys()].some((weekday) => new RegExp(`(?:^| )${weekday}(?: |$)`).test(scheduleKey));
+  const selectedSessions = sessions.filter((session) => {
+    const weekdayMentioned = new RegExp(`(?:^| )${normalizeKey(session.weekdayName)}(?: |$)`).test(scheduleKey);
+    return (!containsWeekday || weekdayMentioned) && (!times.size || times.has(session.startTime));
+  });
+  // If the form value names a timetable but none of the configured sessions
+  // matches it, fail closed. Falling back to all sessions here can put a real
+  // person into the wrong first class and fee band.
+  if (containsWeekday || times.size) return selectedSessions;
+  return sessions;
 }
 
 function courseAliases(key) {
   const aliases = [key];
   aliases.push(key.replace(/^SZINPADI /, ""));
-  if (key === normalizeCourseKey("MŰVÉSZI TORNA HALADÓ ÓVODÁS 5-6 ÉVESEK")) aliases.push(normalizeCourseKey("MŰVÉSZI TORNA ÓVODÁS 5-6 ÉVESEK"));
-  if (key === normalizeCourseKey("MŰVÉSZI TORNA ÓVODÁS 4+")) aliases.push(normalizeCourseKey("MŰVÉSZI TORNA ÓVODÁS 4 ÉVESEK"));
-  if (key === normalizeCourseKey("KLASSZIKUS BALETT GYERMEK 6-8 ÉVESEK")) aliases.push(normalizeCourseKey("KLASSZIKUS BALETT ÓVODÁS 4,5 ÉVES KORTÓL"));
+  for (const [sourceName, targetName] of COURSE_NAME_ALIASES) {
+    const sourceKey = normalizeCourseKey(sourceName);
+    const targetKey = normalizeCourseKey(targetName);
+    if (key === sourceKey) aliases.push(targetKey);
+    if (key === targetKey) aliases.push(sourceKey);
+  }
   return [...new Set(aliases)];
 }
 
@@ -235,9 +295,31 @@ function validateDiscount(registration, firstClassDate) {
   return { applied: false, label: "Nincs kedvezmény" };
 }
 
-function uniqueCategory(sessions) {
+function uniqueCategory(sessions, courseRaw = "") {
   const values = [...new Set(sessions.map((item) => item.feeCategory).filter(Boolean))];
-  return values.length === 1 ? values[0] : "";
+  if (values.length !== 1) return "";
+
+  // For the standard 1x45 / 2x60-style fee bands, count the actual selected
+  // schedule rows. A stale "Heti alkalom" or fee-category label must not turn
+  // one explicitly selected Wednesday class into a twice-weekly fee.
+  const selectedSchedules = new Set(sessions.map((item) => [
+    normalizeKey(item.weekdayName), item.startTime, item.endTime, normalizeKey(item.venue),
+  ].join("|")));
+  const scheduleKey = normalizeKey(courseRaw).replace(/[,+]/g, " ").replace(/\s+/g, " ");
+  const weekdayExplicitlySelected = [...WEEKDAYS.keys()].some((weekday) => (
+    new RegExp(`(?:^| )${weekday}(?: |$)`).test(scheduleKey)
+  ));
+  const configuredFrequencies = [
+    ...new Set(sessions.map((item) => item.sessionsPerWeek).filter((value) => value > 0)),
+  ];
+  const durations = [...new Set(sessions.map((item) => item.minutesPerSession).filter((value) => value > 0))];
+  if (/^\d+\s*x\s*\d+$/i.test(values[0]) && selectedSchedules.size > 0 && durations.length === 1) {
+    const frequency = weekdayExplicitlySelected
+      ? selectedSchedules.size
+      : (configuredFrequencies.length === 1 ? configuredFrequencies[0] : selectedSchedules.size);
+    return `${frequency}x${durations[0]}`;
+  }
+  return values[0];
 }
 
 function readyResult(value) { return { status: AUTOMATION_STATUS.READY, manualReason: "", ...value }; }

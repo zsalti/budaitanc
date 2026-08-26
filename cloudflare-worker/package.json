@@ -9,11 +9,13 @@
     "wrangler": "^4.25.0"
   },
   "scripts": {
+    "test": "npm run check && npm run test:fee && npm run test:email && npm run test:recovery && npm run test:smoke",
     "deploy": "wrangler deploy",
     "dev": "wrangler dev",
     "check": "node --check src/worker.js",
     "test:fee": "node test-fee-engine.mjs",
     "test:email": "node test-email-templates.mjs",
+    "test:recovery": "node test-recovery-classifier.mjs",
     "test:smoke": "node test-smoke.mjs",
     "brevo:inspect": "node scripts/inspect-brevo.mjs",
     "brevo:templates": "node scripts/sync-brevo-templates.mjs",

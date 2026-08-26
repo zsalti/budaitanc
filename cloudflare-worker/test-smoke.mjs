@@ -215,7 +215,7 @@ globalThis.fetch = async (input, options = {}) => {
       { properties: { sheetId: 1, title: " TAGOK I FÉLÉV", gridProperties: { columnCount: masterColumnCount } } },
       { properties: { sheetId: 2, title: "Befizetések napló" } },
       { properties: { sheetId: 3, title: "Függő befizetések" } },
-      { properties: { sheetId: 4, title: "Automata kalk" } },
+      { properties: { sheetId: 4, title: "Tanfolyamok" } },
       { properties: { sheetId: 5, title: "E-mail kimenet" } },
       { properties: { sheetId: 6, title: "E-mail beállítások" } },
       { properties: { sheetId: 7, title: "E-mail eseménynapló" } },
@@ -322,7 +322,7 @@ try {
   assert.equal(masterColumnCount, 46);
   assert.equal(
     emailStatusFormatRequest.addConditionalFormatRule.rule.booleanRule.condition.values[0].userEnteredValue,
-    '=OR($S2=TRUE,$M2="KÉZBESÍTVE",$M2="ELKÜLDVE")',
+    '=OR(AND($N2<>"",$N2<>"MANUÁLIS",OR($M2="BREVO FOGADTA",$M2="KÉZBESÍTVE")),AND(OR($S2=TRUE,$S2="TRUE",$S2="IGAZ",$S2="IGEN",$S2=1),OR($M2="ELKÜLDVE",$M2="ELKÜLDÉS UTÁN MÓDOSULT")))',
   );
 
   const unauthorized = await worker.fetch(new Request("https://example.test/import/wrong"), env);
@@ -548,6 +548,11 @@ try {
   readyRow[17] = "recipient@example.invalid";
   readyRow[18] = "Minta Anna";
   sheetState.push(readyRow);
+  const staleIdentityRow = [...readyRow];
+  staleIdentityRow[0] = "STALE-IDENTITY-001";
+  staleIdentityRow[44] = "Régi";
+  staleIdentityRow[45] = "Másik";
+  sheetState.push(staleIdentityRow);
   const legacyManualRow = Array.from({ length: 34 }, () => "");
   legacyManualRow[0] = "LEGACY-MANUAL-001|1|2026-08-03-v1-draft";
   legacyManualRow[1] = "LEGACY-MANUAL-001";
@@ -566,8 +571,17 @@ try {
     method: "POST", body: JSON.stringify({ pipeline_id: pipeline.pipeline_id }),
   }), env);
   assert.equal(drafts.status, 200);
+  const initialDraftResult = await drafts.json();
+  const staleIdentityResult = initialDraftResult.results.find((row) => row.entry_id === "STALE-IDENTITY-001");
+  assert.equal(staleIdentityResult.status, "KÉZI ELBÍRÁLÁS");
+  assert.match(staleIdentityResult.reason, /segédmező eltér.*automatikus írás.*letiltva/i);
+  assert.equal(emailOutputState.some((row) => row[1] === "STALE-IDENTITY-001"), false);
+  assert.equal(staleIdentityRow[44], "Régi");
+  assert.equal(staleIdentityRow[45], "Másik");
   const readyEmail = emailOutputState.find((row) => row[1] === "TEST-EMAIL-001");
   assert.equal(readyEmail[12], "KÜLDHETŐ");
+  const initialReadySourceHash = readyEmail[15];
+  const initialReadyAutomation = readyRow.slice(34, 44);
   assert.equal(emailOutputState.filter((row) => row[1] === "LEGACY-MANUAL-001").length, 1);
   assert.equal(legacyManualRow[18], true);
 
@@ -593,12 +607,15 @@ try {
     method: "POST", body: JSON.stringify({ pipeline_id: pipeline.pipeline_id }),
   }), env);
   assert.equal(correctedMismatchedLegacy.status, 200);
-  const repairedLegacyDraft = emailOutputState.find((row) => (
-    row[1] === "MISMATCHED-LEGACY-001" && row[4] === readyRow[17] && row[18] !== true
-  ));
-  assert.ok(repairedLegacyDraft);
+  const correctedMismatchedLegacyResult = await correctedMismatchedLegacy.json();
+  const mismatchedResult = correctedMismatchedLegacyResult.results.find((row) => row.entry_id === "MISMATCHED-LEGACY-001");
+  assert.equal(mismatchedResult.status, "KÉZI ELBÍRÁLÁS");
+  assert.match(mismatchedResult.reason, /címzettje eltér/i);
+  assert.equal(emailOutputState.filter((row) => row[1] === "MISMATCHED-LEGACY-001").length, 1);
   assert.equal(mismatchedLegacyRow[4], "wrong-recipient@example.invalid");
   assert.equal(mismatchedLegacyRow[18], true);
+  assert.equal(readyEmail[15], initialReadySourceHash, "a származtatott keresztnév nem változtathatja meg a forráshash-t");
+  assert.deepEqual(readyRow.slice(34, 44), initialReadyAutomation, "az ismételt piszkozatfrissítésnek nulla diffet kell adnia");
 
   const reconciliation = await worker.fetch(new Request("https://example.test/emails/reconcile/test-email-token", {
     method: "POST", body: JSON.stringify({ pipeline_id: pipeline.pipeline_id }),
@@ -684,6 +701,8 @@ try {
   readyEmail[13] = "";
   readyEmail[11] = true;
   readyEmail[28] = await emailRevisionHashFromRow(readyEmail);
+  const approvedFirstClass = readyEmail[8];
+  readyRow[7] = "2026-09-25";
   const send = await worker.fetch(new Request("https://example.test/emails/send/test-email-token", {
     method: "POST", body: JSON.stringify({ pipeline_id: pipeline.pipeline_id }),
   }), env);
@@ -696,6 +715,7 @@ try {
   assert.equal(brevoRequests[0].params.student_full_name, "Teszt Elek");
   assert.equal(readyEmail[12], "BREVO FOGADTA");
   assert.equal(readyEmail[13], "test-brevo-message-id");
+  assert.equal(readyEmail[8], approvedFirstClass, "a küldés nem generálhat új piszkozatot vagy írhatja át a jóváhagyott sort");
   const delivery = await worker.fetch(new Request("https://example.test/webhooks/brevo", {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-BudaiTanc-Brevo-Secret": "test-brevo-webhook-secret" },
@@ -706,6 +726,26 @@ try {
   assert.equal(readyEmail[12], "KÉZBESÍTVE");
   assert.equal(readyEmail[31], "KÉZBESÍTVE");
   assert.equal(emailEventLogState.length, 2);
+  const ambiguousWebhookFirst = Array.from({ length: 34 }, () => "");
+  ambiguousWebhookFirst[0] = "AMBIGUOUS-WEBHOOK-1|ENROLLMENT|1|v1";
+  ambiguousWebhookFirst[1] = "AMBIGUOUS-WEBHOOK-1";
+  ambiguousWebhookFirst[4] = "ambiguous-webhook@example.invalid";
+  ambiguousWebhookFirst[12] = "BREVO FOGADTA";
+  ambiguousWebhookFirst[13] = "ambiguous-message-id";
+  const ambiguousWebhookSecond = [...ambiguousWebhookFirst];
+  ambiguousWebhookSecond[0] = "AMBIGUOUS-WEBHOOK-2|ENROLLMENT|1|v1";
+  ambiguousWebhookSecond[1] = "AMBIGUOUS-WEBHOOK-2";
+  emailOutputState.push(ambiguousWebhookFirst, ambiguousWebhookSecond);
+  const quarantinedWebhook = await worker.fetch(new Request("https://example.test/webhooks/brevo", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-BudaiTanc-Brevo-Secret": "test-brevo-webhook-secret" },
+    body: JSON.stringify({ event: "delivered", email: "ambiguous-webhook@example.invalid", "message-id": "ambiguous-message-id", ts_event: 1786879001 }),
+  }), env);
+  assert.equal(quarantinedWebhook.status, 200);
+  assert.equal((await quarantinedWebhook.json()).matched, false);
+  assert.equal(ambiguousWebhookFirst[12], "BREVO FOGADTA");
+  assert.equal(ambiguousWebhookSecond[12], "BREVO FOGADTA");
+  assert.match(emailEventLogState.at(-1)[7], /KARANTÉN.*2 e-mail-kimeneti sor/i);
   const duplicateSend = await worker.fetch(new Request("https://example.test/emails/send/test-email-token", {
     method: "POST", body: JSON.stringify({ pipeline_id: pipeline.pipeline_id }),
   }), env);
@@ -743,7 +783,7 @@ function stateForRange(range, url = "") {
     if (value.includes("Közlemény eltérések")) return referenceCorrectionsState2;
     return sheetState2;
   }
-  if (value.includes("Automata kalk")) return automationConfigState;
+  if (value.includes("Tanfolyamok")) return automationConfigState;
   if (value.includes("E-mail kimenet")) return emailOutputState;
   if (value.includes("E-mail beállítások")) return emailSettingsState;
   if (value.includes("E-mail eseménynapló")) return emailEventLogState;

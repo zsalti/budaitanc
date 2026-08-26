@@ -24,7 +24,7 @@ const EMAIL_RECONCILIATION_PATH_PREFIX = "/emails/reconcile/";
 const EMAIL_SEND_PATH_PREFIX = "/emails/send/";
 const EMAIL_SETUP_PATH_PREFIX = "/emails/setup/";
 const BREVO_WEBHOOK_PATH = "/webhooks/brevo";
-const AUTOMATION_CONFIG_TAB = "Automata kalk";
+const AUTOMATION_CONFIG_TAB = "Tanfolyamok";
 const EMAIL_OUTPUT_TAB = "E-mail kimenet";
 const REFERENCE_CORRECTIONS_TAB = "Közlemény eltérések";
 const EMAIL_SETTINGS_TAB = "E-mail beállítások";
@@ -1292,7 +1292,7 @@ async function ensureEmailOutputStatusFormatting(accessToken, spreadsheetId, met
     backgroundColor: { red: 0.8509804, green: 0.9411765, blue: 0.827451 },
     backgroundColorStyle: { rgbColor: { red: 0.8509804, green: 0.9411765, blue: 0.827451 } },
   };
-  const statusFormula = 'OR($S2=TRUE,$M2="KÉZBESÍTVE",$M2="ELKÜLDVE")';
+  const statusFormula = 'OR(AND($N2<>"",$N2<>"MANUÁLIS",OR($M2="BREVO FOGADTA",$M2="KÉZBESÍTVE")),AND(OR($S2=TRUE,$S2="TRUE",$S2="IGAZ",$S2="IGEN",$S2=1),OR($M2="ELKÜLDVE",$M2="ELKÜLDÉS UTÁN MÓDOSULT")))';
   const existingRules = emailSheet.conditionalFormats || [];
   const ruleIndex = existingRules.findIndex((rule) =>
     rule.booleanRule?.condition?.type === "CUSTOM_FORMULA"
@@ -1337,7 +1337,7 @@ async function refreshEmailDrafts(accessToken, pipeline, entryIds = null) {
     loadEmailSettings(accessToken, pipeline),
   ]);
   if (text(masterRows[0]?.[0]) !== "Közlemény") throw new Error("A fő Sheet első oszlopa nem Közlemény.");
-  if (text(configRows[0]?.[0]) !== "Tanfolyam kulcs") throw new Error("Az Automata kalk órarend-fejléce hiányzik.");
+  if (text(configRows[0]?.[0]) !== "Tanfolyam kulcs") throw new Error("A Tanfolyamok központi órarend-fejléce hiányzik.");
   if (text(emailRows[0]?.[0]) !== "Küldési kulcs") throw new Error("Az E-mail kimenet fejléce hiányzik.");
 
   const config = parseAutomationConfig(configRows);
@@ -1364,14 +1364,37 @@ async function refreshEmailDrafts(accessToken, pipeline, entryIds = null) {
       continue;
     }
     const calculation = calculateRegistration(registration, config);
+    const canonicalRegistration = {
+      ...registration,
+      contactFirstName: "",
+      studentFirstName: "",
+    };
+    const canonicalDraft = buildEmailDraft(
+      canonicalRegistration,
+      calculation,
+      emailSettings.settings,
+      calculation.isTrial ? EMAIL_EVENT.TRIAL : EMAIL_EVENT.ENROLLMENT,
+    );
+    const identityReason = staleFirstNameReason(registration, canonicalDraft);
+    if (identityReason) {
+      results.push({
+        entry_id: entryId,
+        row_index: index + 1,
+        status: AUTOMATION_STATUS.MANUAL,
+        reason: identityReason,
+        fee: "",
+        first_class: "",
+      });
+      continue;
+    }
     const mainRow = index + 1;
     const firstClassValue = calculation.firstClass ? `${formatDate(calculation.firstClass.date)} ${calculation.firstClass.startTime}` : "";
     const eventType = calculation.isTrial ? EMAIL_EVENT.TRIAL : EMAIL_EVENT.ENROLLMENT;
     const draft = calculation.status === AUTOMATION_STATUS.READY
-      ? buildEmailDraft(registration, calculation, emailSettings.settings, eventType)
+      ? canonicalDraft
       : emptyEmailDraft(eventType);
     const sourceHash = await sha256(JSON.stringify({
-      registration,
+      registration: canonicalRegistration,
       calculation: serializableCalculation(calculation),
       eventType,
       templateVersion: TEMPLATE_VERSION,
@@ -1380,19 +1403,30 @@ async function refreshEmailDrafts(accessToken, pipeline, entryIds = null) {
       params: draft.params,
       settingsConfigured: emailSettings.configured,
     }));
-    const automationValues = [
+    const automationContent = [
       firstClassValue, calculation.semester || "", calculation.feeBand || "", calculation.feeCategory || "",
       calculation.discount || "", calculation.status,
       [calculation.manualReason, draft.manualReason, draft.configurationWarning].filter(Boolean).join(" "),
-      sourceHash, TEMPLATE_VERSION, now,
+      sourceHash, TEMPLATE_VERSION,
+    ];
+    const currentAutomationContent = row.slice(34, 43);
+    const unchangedAutomation = sameSheetValues(currentAutomationContent, automationContent);
+    const automationValues = [
+      ...automationContent,
+      unchangedAutomation && text(row[43]) ? text(row[43]) : now,
     ];
     if (calculation.status === AUTOMATION_STATUS.READY && calculation.isTrial && !text(registration.trialDate)) {
       writes.push({ range: `${quoteSheetName(pipeline.tab_name)}!${TRIAL_DATE_COLUMN}${mainRow}`, values: [[formatDate(calculation.firstClass.date)]] });
     }
-    writes.push({ range: `${quoteSheetName(pipeline.tab_name)}!${AUTOMATION_START_COLUMN}${mainRow}:${AUTOMATION_END_COLUMN}${mainRow}`, values: [automationValues] });
+    if (!sameSheetValues(row.slice(34, 44), automationValues)) {
+      writes.push({ range: `${quoteSheetName(pipeline.tab_name)}!${AUTOMATION_START_COLUMN}${mainRow}:${AUTOMATION_END_COLUMN}${mainRow}`, values: [automationValues] });
+    }
     if (calculation.status === AUTOMATION_STATUS.READY && !calculation.isTrial && calculation.fee) {
       const feeColumn = calculation.semester === 2 ? "AC" : "J";
-      writes.push({ range: `${quoteSheetName(pipeline.tab_name)}!${feeColumn}${mainRow}`, values: [[calculation.fee]] });
+      const feeIndex = calculation.semester === 2 ? 28 : 9;
+      if (text(row[feeIndex]) !== text(calculation.fee)) {
+        writes.push({ range: `${quoteSheetName(pipeline.tab_name)}!${feeColumn}${mainRow}`, values: [[calculation.fee]] });
+      }
     }
     if (!text(registration.contactFirstName) && draft.contactFirstName) {
       writes.push({ range: `${quoteSheetName(pipeline.tab_name)}!${CONTACT_FIRST_NAME_COLUMN}${mainRow}`, values: [[draft.contactFirstName]] });
@@ -1415,9 +1449,22 @@ async function refreshEmailDrafts(accessToken, pipeline, entryIds = null) {
       });
       continue;
     }
-    const existingIndex = findExistingEmailRowIndex(
+    const existingMatch = findExistingEmailRow(
       mutableEmailRows, sendKey, entryId, eventType, periodKey, registration.email,
     );
+    if (existingMatch.manualReason) {
+      results.push({
+        entry_id: entryId,
+        row_index: mainRow,
+        event_type: eventType,
+        status: AUTOMATION_STATUS.MANUAL,
+        reason: existingMatch.manualReason,
+        fee: calculation.fee || "",
+        first_class: firstClassValue,
+      });
+      continue;
+    }
+    const existingIndex = existingMatch.index;
     const existing = existingIndex >= 0 ? mutableEmailRows[existingIndex] : [];
     if (existingIndex >= 0 && text(existing[EMAIL_COLUMN.SEND_KEY]) !== sendKey && isChecked(existing[EMAIL_COLUMN.MANUAL_SENT])) {
       results.push({
@@ -1513,9 +1560,21 @@ async function refreshPaymentEmailDrafts(accessToken, pipeline, entryIds) {
       continue;
     }
     if (!registration.paidDate) continue;
-    const draft = buildEmailDraft(registration, {}, emailSettings.settings, EMAIL_EVENT.PAYMENT_RECEIVED);
+    const canonicalRegistration = {
+      ...registration,
+      contactFirstName: "",
+      studentFirstName: "",
+    };
+    const draft = buildEmailDraft(
+      canonicalRegistration, {}, emailSettings.settings, EMAIL_EVENT.PAYMENT_RECEIVED,
+    );
+    const identityReason = staleFirstNameReason(registration, draft);
+    if (identityReason) {
+      results.push({ entry_id: entryId, status: AUTOMATION_STATUS.MANUAL, reason: identityReason });
+      continue;
+    }
     const sourceHash = await sha256(JSON.stringify({
-      registration,
+      registration: canonicalRegistration,
       paidDate: registration.paidDate,
       eventType: EMAIL_EVENT.PAYMENT_RECEIVED,
       templateVersion: TEMPLATE_VERSION,
@@ -1534,9 +1593,18 @@ async function refreshPaymentEmailDrafts(accessToken, pipeline, entryIds) {
       });
       continue;
     }
-    const existingIndex = findExistingEmailRowIndex(
+    const existingMatch = findExistingEmailRow(
       mutableEmailRows, sendKey, entryId, EMAIL_EVENT.PAYMENT_RECEIVED, periodKey, registration.email,
     );
+    if (existingMatch.manualReason) {
+      results.push({
+        entry_id: entryId,
+        status: AUTOMATION_STATUS.MANUAL,
+        reason: existingMatch.manualReason,
+      });
+      continue;
+    }
+    const existingIndex = existingMatch.index;
     const existing = existingIndex >= 0 ? mutableEmailRows[existingIndex] : [];
     if (existingIndex >= 0 && text(existing[EMAIL_COLUMN.SEND_KEY]) !== sendKey && isChecked(existing[EMAIL_COLUMN.MANUAL_SENT])) {
       results.push({
@@ -1632,27 +1700,57 @@ function sameRecipient(left, right) {
   return text(left).toLowerCase() === text(right).toLowerCase();
 }
 
-function findExistingEmailRowIndex(rows, sendKey, entryId, eventType, periodKey, recipient) {
-  // A korábbi kimeneti sor történeti adat lehet. Ha a címzett nem egyezik a
-  // mai forrással, nem írjuk felül és nem használjuk újra: külön, jóváhagyás
-  // nélküli új piszkozat készül a helyes személyhez.
-  const isUsable = (row) => sameRecipient(row[EMAIL_COLUMN.TO], recipient);
-  const exactIndex = rows.findIndex((emailRow, emailIndex) => (
-    emailIndex > 0 && text(emailRow[EMAIL_COLUMN.SEND_KEY]) === sendKey && isUsable(emailRow)
-  ));
-  if (exactIndex >= 0) return exactIndex;
+function sameSheetValues(left, right) {
+  return left.length === right.length && left.every((value, index) => text(value) === text(right[index]));
+}
 
-  // A template version change must refresh the existing draft, not append a
-  // second row for the same registration and email event. Manually sent rows
-  // remain authoritative too: refreshEmailDrafts will mark them as changed
-  // after send instead of replacing their sending history.
-  return rows.findIndex((emailRow, emailIndex) => (
-    emailIndex > 0
-    && text(emailRow[EMAIL_COLUMN.ENTRY_ID]) === entryId
-    && emailEventTypeFromRow(emailRow) === eventType
-    && emailPeriodKeyFromRow(emailRow) === periodKey
-    && isUsable(emailRow)
-  ));
+function staleFirstNameReason(registration, canonicalDraft) {
+  const conflicts = [];
+  if (text(registration.contactFirstName) && text(canonicalDraft.contactFirstName)
+      && text(registration.contactFirstName).toLocaleLowerCase("hu") !== text(canonicalDraft.contactFirstName).toLocaleLowerCase("hu")) {
+    conflicts.push("kapcsolattartó");
+  }
+  if (text(registration.studentFirstName) && text(canonicalDraft.studentFirstName)
+      && text(registration.studentFirstName).toLocaleLowerCase("hu") !== text(canonicalDraft.studentFirstName).toLocaleLowerCase("hu")) {
+    conflicts.push("növendék");
+  }
+  return conflicts.length
+    ? `Az ${conflicts.join(" és ")} keresztnév-segédmező eltér a kanonikus forrástól; automatikus írás és e-mail-készítés letiltva.`
+    : "";
+}
+
+function findExistingEmailRow(rows, sendKey, entryId, eventType, periodKey, recipient) {
+  // A küldési szándék (jelentkezés + eseménytípus + időszak) csak egy aktív
+  // sort kaphat. A régi viselkedés címzetteltérésnél egy új piszkozatot fűzött
+  // a történeti sor mellé; ez képes volt ugyanazzal a küldési kulccsal több
+  // aktív sort létrehozni. Ilyenkor kizárólag a kontrollált rekonstrukció
+  // dönthet, ezért a generálás írás nélkül kézi felülvizsgálatra áll meg.
+  const candidates = rows
+    .map((row, index) => ({ row, index }))
+    .filter(({ row, index }) => index > 0 && (
+      text(row[EMAIL_COLUMN.SEND_KEY]) === sendKey
+      || (
+        text(row[EMAIL_COLUMN.ENTRY_ID]) === entryId
+        && emailEventTypeFromRow(row) === eventType
+        && emailPeriodKeyFromRow(row) === periodKey
+      )
+    ));
+  if (!candidates.length) return { index: -1, manualReason: "" };
+
+  const recipientMatches = candidates.filter(({ row }) => sameRecipient(row[EMAIL_COLUMN.TO], recipient));
+  if (recipientMatches.length === 1 && candidates.length === 1) {
+    return { index: recipientMatches[0].index, manualReason: "" };
+  }
+  if (recipientMatches.length === 0) {
+    return {
+      index: -1,
+      manualReason: "A meglévő e-mail-kimeneti sor címzettje eltér a jelenlegi forrástól; új piszkozat nem készül a kontrollált rekonstrukció előtt.",
+    };
+  }
+  return {
+    index: -1,
+    manualReason: "Több e-mail-kimeneti sor tartozik ugyanahhoz a küldési szándékhoz; új piszkozat nem készül a kontrollált rekonstrukció előtt.",
+  };
 }
 
 function hasLegacyManualEmailHistory(rows, entryId, recipient) {
@@ -1724,18 +1822,24 @@ async function recordBrevoEvent(accessToken, pipeline, payload) {
     return { duplicate: true, event: rawEvent, matched: false };
   }
 
-  let emailIndex = -1;
-  if (sendKeyFromPayload) {
-    emailIndex = emailRows.findIndex((row, index) => index > 0 && text(row[EMAIL_COLUMN.SEND_KEY]) === sendKeyFromPayload);
-  }
-  if (emailIndex < 0 && messageId) {
-    emailIndex = emailRows.findIndex((row, index) => index > 0 && text(row[EMAIL_COLUMN.MESSAGE_ID]) === messageId);
-  }
+  const matches = messageId && recipient
+    ? emailRows
+      .map((row, index) => ({ row, index }))
+      .filter(({ row, index }) => index > 0
+        && text(row[EMAIL_COLUMN.MESSAGE_ID]) === messageId
+        && sameRecipient(row[EMAIL_COLUMN.TO], recipient))
+    : [];
+  const emailIndex = matches.length === 1 ? matches[0].index : -1;
   const matchedRow = emailIndex >= 0 ? emailRows[emailIndex] : [];
   const sendKey = text(matchedRow[EMAIL_COLUMN.SEND_KEY]) || sendKeyFromPayload;
   const reason = text(payload.reason || payload.description || payload.response || payload.error);
   const receivedAt = new Date().toISOString();
-  const eventRow = [eventId, messageId, sendKey, brevoEventLabel(rawEvent), recipient, eventAt, receivedAt, reason, rawEvent];
+  const quarantineReason = !messageId || !recipient
+    ? "KARANTÉN: hiányzik a Brevo message ID vagy a címzett; e-mail-kimeneti sor nem módosult."
+    : matches.length !== 1
+      ? `KARANTÉN: a message ID és címzett alapján ${matches.length} e-mail-kimeneti sor található; e-mail-kimeneti sor nem módosult.`
+      : "";
+  const eventRow = [eventId, messageId, sendKey, brevoEventLabel(rawEvent), recipient, eventAt, receivedAt, [reason, quarantineReason].filter(Boolean).join(" "), rawEvent];
   const writes = [];
 
   const mappedStatus = brevoStatus(rawEvent) || AUTOMATION_STATUS.NEEDS_REVIEW;
@@ -1832,7 +1936,6 @@ function brevoNextStatus(current, incoming) {
 
 async function sendApprovedEmails(accessToken, pipeline, env) {
   if (!env.BREVO_API_KEY || !env.BREVO_SENDER_EMAIL) throw new Error("Hiányzik a BREVO_API_KEY vagy a BREVO_SENDER_EMAIL Worker secret.");
-  await refreshEmailDrafts(accessToken, pipeline, null);
   const rows = await readSheetRows(accessToken, pipeline.spreadsheet_id, EMAIL_OUTPUT_TAB, "A:AH");
   if (text(rows[0]?.[0]) !== "Küldési kulcs") throw new Error("Az E-mail kimenet fejléce hiányzik.");
   let accepted = 0;

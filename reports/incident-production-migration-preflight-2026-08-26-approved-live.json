@@ -1,0 +1,29 @@
+{
+  "approval_id": "user-confirmation-2026-08-26-live-values-1923-1932",
+  "approved_manifest_sha256": "c13673cd312c9a1f91e96854c2b672c0c3274aa6113a7181d7648a171964ab1e",
+  "backup_spreadsheet_id": "130hXMtipcwAwcsFhvZoFyOV4eS1ylh49gR5nmgESeN0",
+  "generated_at": "2026-08-26T16:17:18.468357+00:00",
+  "manifest_mode": "read_only",
+  "manifest_snapshot_mode": "offline_replay",
+  "mode": "production_preflight",
+  "production_spreadsheet_id": "1hHlwBe_pK-Cdg7zoGFrd1adeTw8lYAMyZOCKZmzlcTs",
+  "production_write": false,
+  "real_email_send": false,
+  "source_snapshot_hashes": {
+    "Automata kalk": "a96ba504cb2cb0d9131ee3f029ce9c0271e078fe876232d5d83c2b324a13a764",
+    "E-mail beállítások": "f96277da35e87a2359d6e0f1dfdd391be2027ff99ed75e42ca24105fa073ed38",
+    "E-mail eseménynapló": "e7ec1c4ad717cee4da38b0d342448b5f47dd84212ca6fbc4f18e34f09a3d1fe4",
+    "E-mail kimenet": "8e2f42ccc142de8571d058c58230ce6ef3431776bdd8a36717a1e36938cd6a9d",
+    "master": "291ad32b4798b1d763563a8b9e959a88dd4d1f10cb0b3aa310a57b37862dd99a"
+  },
+  "source_snapshot_stable": true,
+  "target_validation": {
+    "email_approvals_enabled": 0,
+    "email_unique_send_keys": 169,
+    "green_sent_rows": 117,
+    "incident_archive_rows": 305,
+    "manual_action_rows": 19,
+    "manual_history_review_rows": 49,
+    "master_unique_ids": 169
+  }
+}

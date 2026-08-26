@@ -45,6 +45,108 @@ const aliasResult = calculateRegistration({ ...base, courseRaw: "KLASSZIKUS BALE
 assert.equal(aliasResult.status, AUTOMATION_STATUS.READY);
 assert.equal(aliasResult.firstClass.date.toISOString().slice(0, 10), "2026-09-15");
 
+const recoveryAliases = [
+  ["JAZZ BALETT IFJÚSÁGI-FELNŐTT 15 ÉVES KORTÓL", "JAZZ TÁNC IFJÚSÁGI-FELNŐTT 15 ÉVES KORTÓL"],
+  ["KLASSZIKUS BALETT ISKOLÁS ALSÓ TAGOZAT", "KLASSZIKUS BALETT ISKOLÁS ALSÓ TAGOZATOS"],
+  ["KLASSZIKUS BALETT ISKOLÁS FELSŐ TAGOZAT", "ISKOLÁS FELSŐ TAGOZATOS"],
+  ["KLASSZIKUS-MODERN BALETTHALADÓ KÖZÉPISKOLÁS ÉS FELNŐTT", "HALADÓ KLASSZIKUS-MODERN BALETT KÖZÉPISKOLÁS ÉS FELNŐTT 14+"],
+  ["KLASSZIKUS BALETT SPICCTECHNIKA KÖZÉPISKOLÁS ÉS FELNŐTT", "KLASSZIKUS BALETT SPICCTECHNIKA KÖZÉPISKOLÁS ÉS FELNŐTT 14+"],
+  ["KLASSZIKUS BALETT KEZDŐ ÉS ÚJRAKEZDŐ KÖZÉPISKOLÁS ÉS FELNŐTT 14+", "KEZDŐ ÉS ÚJRAKEZDŐ KLASSZIKUS BALETT KÖZÉPISKOLÁS ÉS FELNŐTT 14+"],
+  ["KORTÁRS TÁNCMŰHELY HALADÓ 14+", "KORTÁRS TÁNCMŰHELY HALADÓ 14-20 ÉVESEK"],
+  ["MODERN TÁNC 12-15 ÉVES", "MODERN TÁNC 10-14 ÉVES"],
+  ["MŰVÉSZI TORNA ÓVODÁS KEZDŐ 4+", "MŰVÉSZI TORNA ÓVODÁS KEZDŐ 4-5 ÉVESEK"],
+  ["MŰVÉSZI TORNA HALADÓ ÓVODÁS 5-7 ÉVESEK", "MŰVÉSZI TORNA 5-7 ÉVESEK HALADÓ"],
+  ["MŰVÉSZI TORNA ISKOLÁS 1. ISKOLA ALSÓ TAGOZAT, 6-7 ÉVESEK", "MŰVÉSZI TORNA KISISKOLÁS 1. (6-7 ÉVESEK)"],
+  ["MŰVÉSZI ISKOLÁS 2. HALADÓ ALSÓ TAGOZAT 8-9 ÉVESEK", "MŰVÉSZI TORNA ISKOLÁS 2. HALADÓ (ALSÓ TAGOZAT)"],
+  ["MŰVÉSZI TORNA HALADÓ IFJÚSÁGI ÉS FELNŐTT", "MŰVÉSZI TORNA IFJÚSÁGI ÉS FELNŐTT"],
+  ["NÉPTÁNC ÓVODÁS 4+", "NÉPTÁNC ÓVODÁS"],
+];
+for (const [sourceName, targetName] of recoveryAliases) {
+  const targetConfig = parseAutomationConfig([
+    [targetName, "", "SZERDA", "17:00", "18:00", "Hajós terem", "Tanár", 1, 60, "1x60", false],
+  ]);
+  const result = calculateRegistration({
+    ...base,
+    courseRaw: `${sourceName}/SZERDA HAJÓS TEREM/17.00-18.00/TANÁR`,
+    trialSignup: "igen",
+    trialDate: "",
+  }, targetConfig);
+  assert.equal(result.status, AUTOMATION_STATUS.READY, `${sourceName} -> ${targetName}`);
+}
+
+const sziranyiConfig = parseAutomationConfig([
+  ["MODERN TÁNC 10-14 ÉVES", "", "SZERDA", "15:30", "16:45", "Hajós terem", "Szirányi Laura", 2, 75, "2x75", false],
+  ["MODERN TÁNC 10-14 ÉVES", "", "PÉNTEK", "15:15", "16:30", "Hajós terem", "Szirányi Laura", 2, 75, "2x75", false],
+]);
+const sziranyiResult = calculateRegistration({
+  ...base,
+  courseRaw: "MODERN TÁNC 12-15 ÉVES /SZERDA ÉS PÉNTEK HAJÓS TEREM/SZERDA 15.30-16.45 ÉS PÉNTEK 15.15-16.30 /SZIRÁNYI LAURA",
+  trialSignup: "igen",
+  trialDate: "",
+}, sziranyiConfig);
+assert.equal(sziranyiResult.status, AUTOMATION_STATUS.READY);
+assert.equal(sziranyiResult.firstClass.date.toISOString().slice(0, 10), "2026-09-16");
+
+const renamedSziranyiConfig = parseAutomationConfig([
+  ["MODERN TÁNC 12-15 ÉVES", "", "SZERDA", "15:30", "16:45", "Hajós terem", "Szirányi Laura", 2, 75, "2x75", false],
+  ["MODERN TÁNC 12-15 ÉVES", "", "PÉNTEK", "15:15", "16:30", "Hajós terem", "Szirányi Laura", 2, 75, "2x75", false],
+]);
+const historicalSziranyiResult = calculateRegistration({
+  ...base,
+  courseRaw: "MODERN TÁNC 10-14 ÉVES /SZERDA HAJÓS TEREM/15.30-16.45 ÉS PÉNTEK HAJÓS TEREM /15.15-16.30 /SZIRÁNYI LAURA",
+  trialSignup: "igen",
+  trialDate: "",
+}, renamedSziranyiConfig);
+assert.equal(historicalSziranyiResult.status, AUTOMATION_STATUS.READY);
+assert.equal(historicalSziranyiResult.firstClass.date.toISOString().slice(0, 10), "2026-09-16");
+
+const conflictingSchedule = calculateRegistration({
+  ...base,
+  courseRaw: "JAZZ BALETT IFJÚSÁGI-FELNŐTT 15 ÉVES KORTÓL/KEDD HAJÓS TEREM ÉS PÉNTEK BERCZIK TEREM/16.30-18.00/TANÁR",
+  trialSignup: "igen",
+}, parseAutomationConfig([
+  ["JAZZ TÁNC IFJÚSÁGI-FELNŐTT 15 ÉVES KORTÓL", "", "HÉTFŐ", "16:30", "18:00", "Hajós terem", "Tanár", 2, 90, "2x90", false],
+  ["JAZZ TÁNC IFJÚSÁGI-FELNŐTT 15 ÉVES KORTÓL", "", "CSÜTÖRTÖK", "16:30", "18:00", "Ágnes terem", "Tanár", 2, 90, "2x90", false],
+]));
+assert.equal(conflictingSchedule.status, AUTOMATION_STATUS.MANUAL);
+assert.match(conflictingSchedule.manualReason, /ismeretlen tanfolyam|hiányzó órarend/i);
+
+const artisticGymnasticsConfig = parseAutomationConfig([
+  ["MŰVÉSZI TORNA ÓVODÁS 5-6 ÉVESEK", "", "SZERDA", "16:00", "17:00", "Hajós terem", "Tanár", 1, 60, "2x60", false],
+  ["MŰVÉSZI TORNA ÓVODÁS 5-6 ÉVESEK", "", "SZOMBAT", "09:00", "10:00", "Hajós terem", "Tanár", 2, 60, "2x60", false],
+  ["", "", "", "", "", "", "", "", "", "", "", "", 1, "2026-09-03", "2026-09-30", "1x60", 43000, 40850],
+  ["", "", "", "", "", "", "", "", "", "", "", "", 1, "2026-09-03", "2026-09-30", "2x60", 60000, 57000],
+]);
+const artisticGymnasticsResult = calculateRegistration({
+  ...base,
+  courseRaw: "MŰVÉSZI TORNA ÓVODÁS 5-6 ÉVESEK/SZERDA HAJÓS TEREM/16.00-17.00/TANÁR",
+  submittedAt: "2026-09-15",
+  trialSignup: "nem",
+}, artisticGymnasticsConfig);
+assert.equal(artisticGymnasticsResult.status, AUTOMATION_STATUS.READY);
+assert.equal(artisticGymnasticsResult.feeCategory, "1x60");
+assert.equal(artisticGymnasticsResult.fee, 43000);
+
+const staleFrequencyConfig = parseAutomationConfig([
+  ["EGY SZERDAI ÓRA", "", "SZERDA", "18:15", "19:00", "Hajós terem", "Tanár", 2, 45, "2x45", false],
+  ["", "", "", "", "", "", "", "", "", "", "", "", 1, "2026-09-03", "2026-09-30", "1x45", 39000, 37050],
+]);
+const staleFrequencyResult = calculateRegistration({
+  ...base,
+  courseRaw: "EGY SZERDAI ÓRA/SZERDA HAJÓS TEREM/18.15-19.00/TANÁR",
+  submittedAt: "2026-09-15",
+}, staleFrequencyConfig);
+assert.equal(staleFrequencyResult.status, AUTOMATION_STATUS.READY);
+assert.equal(staleFrequencyResult.feeCategory, "1x45");
+assert.equal(staleFrequencyResult.fee, 39000);
+
+const alternateAttendance = calculateRegistration({
+  ...base,
+  alternateAttendance: "heti 1",
+}, noException);
+assert.equal(alternateAttendance.status, AUTOMATION_STATUS.MANUAL);
+assert.match(alternateAttendance.manualReason, /eltérő óraszám|alternatív részvétel/i);
+
 const sibling = calculateRegistration({ ...base, siblingName: "Teszt Béla", siblingGroup: "Péntek" }, noException);
 assert.equal(sibling.fee, 36311);
 assert.match(sibling.discount, /Testvér/);
@@ -67,6 +169,13 @@ assert.equal(invalidTrial.status, AUTOMATION_STATUS.MANUAL);
 
 const manualCourse = calculateRegistration({ ...base, courseRaw: "PILATES/KEDD ÁGNES TEREM/18.30-19.30/TANÁR" }, noException);
 assert.equal(manualCourse.status, AUTOMATION_STATUS.MANUAL);
+const manualTrialCourse = calculateRegistration({
+  ...base,
+  courseRaw: "PILATES/KEDD ÁGNES TEREM/18.30-19.30/TANÁR",
+  trialSignup: "igen",
+}, noException);
+assert.equal(manualTrialCourse.status, AUTOMATION_STATUS.MANUAL);
+assert.equal(manualTrialCourse.isTrial, true, "a kézi elbírálású próba sem válhat beiratkozási e-mail-szándékká");
 
 const semesterTwo = calculateRegistration({ ...base, submittedAt: "2027-02-01", startDate: "2027-02-01" }, noException);
 assert.equal(semesterTwo.semester, 2);

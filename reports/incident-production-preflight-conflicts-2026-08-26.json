@@ -1,0 +1,28 @@
+{
+  "conflicts": [
+    {
+      "changed_columns": [
+        "I. féléves tandíj",
+        "Egyéb megjegyzés",
+        "Más óraszámban jár"
+      ],
+      "entry_id": "1923",
+      "identity_matches_source": false,
+      "live_row": 137
+    },
+    {
+      "changed_columns": [
+        "I. féléves tandíj"
+      ],
+      "entry_id": "1932",
+      "identity_matches_source": false,
+      "live_row": 149
+    }
+  ],
+  "generated_at": "2026-08-26T15:53:11.708903+00:00",
+  "mode": "staging_only_production_conflict_review",
+  "production_spreadsheet_untouched": true,
+  "review_rows": 4,
+  "review_sheet_id": 1470784915,
+  "staging_spreadsheet_id": "1dNrM-YQpXW_KyxUqEaztZM3fVj7ILISkaBAHxh8u4RQ"
+}
