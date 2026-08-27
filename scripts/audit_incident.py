@@ -199,6 +199,20 @@ def main() -> int:
     master_data = master_rows[1:]
     email_data = email_rows[1:]
     event_data = event_rows[1:]
+    email_event_summaries = [
+        {
+            "event_row": row_number,
+            "event": value_at(row, 3),
+            "raw_type": value_at(row, 8),
+            "event_at": value_at(row, 5),
+            "received_at": value_at(row, 6),
+        }
+        for row_number, row in enumerate(event_data, start=2)
+        if value_at(row, 0)
+    ]
+    email_event_type_counts = Counter(
+        summary["raw_type"] or "unknown" for summary in email_event_summaries
+    )
     master_by_id: dict[str, list[tuple[int, list[str]]]] = defaultdict(list)
     stale_helper_candidates: list[dict[str, Any]] = []
     for offset, row in enumerate(master_data, start=2):
@@ -271,6 +285,7 @@ def main() -> int:
             "email_identity_issues": len(email_identity_issues),
             "stale_name_helper_candidates": len(stale_helper_candidates),
             "active_email_approvals": len(active_email_approvals),
+            "email_event_types": dict(sorted(email_event_type_counts.items())),
         },
         "findings": {
             "duplicate_master_ids": duplicate_master_ids,
@@ -279,6 +294,7 @@ def main() -> int:
             "email_identity_issues": email_identity_issues,
             "stale_name_helper_candidates": stale_helper_candidates,
             "active_email_approvals": active_email_approvals,
+            "latest_email_events": email_event_summaries[-5:],
         },
     }
     if args.gravity_csv:
