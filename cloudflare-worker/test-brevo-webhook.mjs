@@ -46,10 +46,12 @@ try {
   assert.equal(emailRows[1][31], "KÉZBESÍTVE");
 
   const deliverySnapshot = JSON.stringify(emailRows);
-  const replay = await recordBrevoEvent("test-access-token", pipeline, delivered);
-  assert.deepEqual(replay, { duplicate: true, event: "delivered", matched: false });
-  assert.equal(eventRows.length, 2, "a replay nem hozhat létre második naplóbejegyzést");
-  assert.equal(JSON.stringify(emailRows), deliverySnapshot, "a replay nem írhat e-mail-kimenetet");
+  for (let run = 2; run <= 10; run += 1) {
+    const replay = await recordBrevoEvent("test-access-token", pipeline, delivered);
+    assert.deepEqual(replay, { duplicate: true, event: "delivered", matched: false }, `${run}. futás: replay válasz`);
+    assert.equal(eventRows.length, 2, `${run}. futás: a replay nem hozhat létre második naplóbejegyzést`);
+    assert.equal(JSON.stringify(emailRows), deliverySnapshot, `${run}. futás: a replay nem írhat e-mail-kimenetet`);
+  }
 
   const lateRequest = await recordBrevoEvent("test-access-token", pipeline, webhook({
     id: "late-request-1", event: "request", messageId: "message-1", timestamp: 1787828460,
