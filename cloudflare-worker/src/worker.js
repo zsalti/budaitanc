@@ -52,6 +52,7 @@ const STAFF_ADDITIONAL_SYNC_HEADERS = [
   "Egyéb megjegyzés",
 ];
 const inFlightSends = new Set();
+const inFlightBrevoEvents = new Map();
 
 const EMAIL_COLUMN = Object.freeze({
   SEND_KEY: 0, ENTRY_ID: 1, PERIOD: 2, TEMPLATE_VERSION: 3, TO: 4, SUBJECT: 5, PLAIN: 6, HTML: 7,
@@ -2095,6 +2096,23 @@ function isFinalEmailStatus(status) {
 }
 
 async function recordBrevoEvent(accessToken, pipeline, payload) {
+  const eventKey = brevoEventKey(payload);
+  const inFlight = inFlightBrevoEvents.get(eventKey);
+  if (inFlight) {
+    await inFlight;
+    return { duplicate: true, event: normalizeBrevoEvent(payload.event || payload.type), matched: false };
+  }
+
+  const record = (async () => recordBrevoEventOnce(accessToken, pipeline, payload, await brevoEventId(payload)))();
+  inFlightBrevoEvents.set(eventKey, record);
+  try {
+    return await record;
+  } finally {
+    if (inFlightBrevoEvents.get(eventKey) === record) inFlightBrevoEvents.delete(eventKey);
+  }
+}
+
+async function recordBrevoEventOnce(accessToken, pipeline, payload, eventId) {
   const [eventRows, emailRows] = await Promise.all([
     readSheetRows(accessToken, pipeline.spreadsheet_id, EMAIL_EVENT_LOG_TAB, "A:I"),
     readSheetRows(accessToken, pipeline.spreadsheet_id, EMAIL_OUTPUT_TAB, "A:AH"),
@@ -2107,9 +2125,6 @@ async function recordBrevoEvent(accessToken, pipeline, payload) {
   const recipient = text(payload.email || payload.recipient);
   const eventAt = brevoEventTimestamp(payload);
   const sendKeyFromPayload = brevoSendKey(payload);
-  const eventId = await sha256(JSON.stringify({
-    brevoId: text(payload.id || payload.event_id), messageId, rawEvent, recipient, eventAt,
-  }));
   if (eventRows.slice(1).some((row) => text(row[0]) === eventId
       || (messageId && text(row[1]) === messageId && text(row[8]) === rawEvent))) {
     return { duplicate: true, event: rawEvent, matched: false };
@@ -2161,6 +2176,20 @@ async function recordBrevoEvent(accessToken, pipeline, payload) {
     writes.length ? writeSheetRanges(accessToken, pipeline.spreadsheet_id, writes) : Promise.resolve(),
   ]);
   return { duplicate: false, event: rawEvent, matched: emailIndex >= 0, send_key: sendKey, status: mappedStatus || "" };
+}
+
+async function brevoEventId(payload) {
+  return sha256(brevoEventKey(payload));
+}
+
+function brevoEventKey(payload) {
+  const rawEvent = normalizeBrevoEvent(payload.event || payload.type);
+  const messageId = text(payload["message-id"] || payload.messageId || payload.message_id);
+  const recipient = text(payload.email || payload.recipient);
+  const eventAt = brevoEventTimestamp(payload);
+  return JSON.stringify({
+    brevoId: text(payload.id || payload.event_id), messageId, rawEvent, recipient, eventAt,
+  });
 }
 
 function brevoSendKey(payload) {
