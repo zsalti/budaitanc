@@ -47,6 +47,10 @@ def value_at(row: list[str], index: int) -> str:
     return text(row[index] if index < len(row) else "")
 
 
+def checked(value: Any) -> bool:
+    return text(value).casefold() in {"true", "igen", "1"}
+
+
 def email_key(value: str) -> str:
     return text(value).lower()
 
@@ -220,6 +224,11 @@ def main() -> int:
         for row_number, row in enumerate(email_data, start=2)
         if value_at(row, 0)
     ]
+    active_email_approvals = [
+        {"email_row": row_number, "entry_id": value_at(row, 1)}
+        for row_number, row in nonempty_email_rows
+        if checked(value_at(row, 11))
+    ]
     duplicate_send_keys = count_duplicates([value_at(row, 0) for _, row in nonempty_email_rows])
     email_rows_by_send_key: dict[str, list[int]] = defaultdict(list)
     email_rows_by_intent: dict[tuple[str, str, str], list[int]] = defaultdict(list)
@@ -261,6 +270,7 @@ def main() -> int:
             "duplicate_email_intents": len(duplicate_intents),
             "email_identity_issues": len(email_identity_issues),
             "stale_name_helper_candidates": len(stale_helper_candidates),
+            "active_email_approvals": len(active_email_approvals),
         },
         "findings": {
             "duplicate_master_ids": duplicate_master_ids,
@@ -268,6 +278,7 @@ def main() -> int:
             "duplicate_email_intents": sorted(duplicate_intents, key=lambda item: (item["entry_id"], item["event_type"], item["period"])),
             "email_identity_issues": email_identity_issues,
             "stale_name_helper_candidates": stale_helper_candidates,
+            "active_email_approvals": active_email_approvals,
         },
     }
     if args.gravity_csv:
