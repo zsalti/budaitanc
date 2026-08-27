@@ -1,23 +1,20 @@
 const BUDAI_TANC_SYNC = Object.freeze({
   endpoint: 'https://budaitancklub-registration-webhook.zsolt-3bf.workers.dev',
   pipelineId: 'tanctanfolyam_jelentkezes',
-  tokenProperty: 'SYNC_ADMIN_TOKEN',
-  paymentTokenProperty: 'PAYMENT_IMPORT_TOKEN',
   emailTokenProperty: 'EMAIL_ADMIN_TOKEN',
 });
 
 function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('Budai Tánc')
-    .addItem('Munkatársi Sheet szinkronizálása', 'syncStaffSheet')
-    .addItem('Befizetések érkeztetése', 'importPayments')
     .addItem('E-mail lapok inicializálása', 'setupEmailInfrastructure')
-    .addItem('E-mail-piszkozatok frissítése', 'refreshEmailDrafts')
+    .addItem('E-mail-piszkozatok készítése importált ID-khoz', 'refreshEmailDrafts')
     .addItem('Hibás közlemények összevezetése', 'reconcileEmailReferences')
     .addItem('Jóváhagyott e-mailek küldése', 'sendApprovedEmails')
     .addSeparator()
-    .addItem('Szinkron token beállítása', 'configureSyncToken')
-    .addItem('Befizetési token beállítása', 'configurePaymentToken')
+    .addItem('Forrásoszlopok védelmének frissítése', 'protectRegistrationSourceColumns')
+    .addItem('Részleges alapszűrő eltávolítása', 'removePartialMasterFilter')
+    .addSeparator()
     .addItem('E-mail token beállítása', 'configureEmailToken')
     .addToUi();
 }
@@ -31,11 +28,7 @@ function configureEmailToken() {
 }
 
 function configurePaymentToken() {
-  configureToken_(
-    BUDAI_TANC_SYNC.paymentTokenProperty,
-    'Befizetési token',
-    'Illeszd be az egyszer kapott befizetés-import tokent. A Google Script Properties-ben tároljuk, nem a Sheetben.',
-  );
+  SpreadsheetApp.getUi().alert('A befizetés-import a helyreállítás alatt ki van kapcsolva.');
 }
 
 function configureToken_(propertyName, title, prompt) {
@@ -49,66 +42,30 @@ function configureToken_(propertyName, title, prompt) {
 }
 
 function configureSyncToken() {
-  const ui = SpreadsheetApp.getUi();
-  const result = ui.prompt(
-    'Szinkron token',
-    'Illeszd be az egyszer kapott szinkron tokent. A Google Script Properties-ben tároljuk, nem a Sheetben.',
-    ui.ButtonSet.OK_CANCEL,
-  );
-  if (result.getSelectedButton() !== ui.Button.OK) return;
-  const token = result.getResponseText().trim();
-  if (!token) return ui.alert('Nem adtál meg tokent.');
-  PropertiesService.getScriptProperties().setProperty(BUDAI_TANC_SYNC.tokenProperty, token);
-  ui.alert('A szinkron token elmentve.');
+  SpreadsheetApp.getUi().alert('A teljes munkatársi Sheet-szinkron a helyreállítás alatt ki van kapcsolva.');
 }
 
 function syncStaffSheet() {
-  const ui = SpreadsheetApp.getUi();
-  const token = PropertiesService.getScriptProperties().getProperty(BUDAI_TANC_SYNC.tokenProperty);
-  if (!token) return ui.alert('Előbb válaszd a Budai Tánc → Szinkron token beállítása menüpontot.');
-
-  const response = UrlFetchApp.fetch(`${BUDAI_TANC_SYNC.endpoint}/sync/${encodeURIComponent(token)}`, {
-    method: 'post',
-    contentType: 'application/json',
-    payload: JSON.stringify({ pipeline_id: BUDAI_TANC_SYNC.pipelineId }),
-    muteHttpExceptions: true,
-  });
-  const status = response.getResponseCode();
-  const body = response.getContentText();
-  if (status < 200 || status >= 300) throw new Error(`A szinkron nem sikerült (HTTP ${status}): ${body}`);
-
-  const result = JSON.parse(body);
-  ui.alert(`Szinkron kész. Új: ${result.created}, frissített: ${result.updated}, törölt: ${result.deleted}.`);
+  SpreadsheetApp.getUi().alert('A teljes munkatársi Sheet-szinkron a helyreállítás alatt ki van kapcsolva.');
 }
 
 function importPayments() {
-  const ui = SpreadsheetApp.getUi();
-  const token = PropertiesService.getScriptProperties().getProperty(BUDAI_TANC_SYNC.paymentTokenProperty);
-  if (!token) return ui.alert('Előbb válaszd a Budai Tánc → Befizetési token beállítása menüpontot.');
-
-  const response = UrlFetchApp.fetch(`${BUDAI_TANC_SYNC.endpoint}/payments/${encodeURIComponent(token)}`, {
-    method: 'post',
-    contentType: 'application/json',
-    payload: JSON.stringify({ pipeline_id: BUDAI_TANC_SYNC.pipelineId }),
-    muteHttpExceptions: true,
-  });
-  const status = response.getResponseCode();
-  const body = response.getContentText();
-  if (status < 200 || status >= 300) throw new Error(`A befizetések érkeztetése nem sikerült (HTTP ${status}): ${body}`);
-
-  const result = JSON.parse(body);
-  ui.alert(
-    `Befizetések feldolgozva. Fájl sorai: ${result.total_rows}, új sorok: ${result.new_rows}, ` +
-    `automatikusan könyvelt: ${result.booked} (ebből javított közleménnyel: ${result.corrected_booked}, ` +
-    `névvel megerősítve: ${result.name_confirmed}), már rögzített: ${result.already_recorded}, ` +
-    `függő: ${result.pending}, korábbi/ismételt: ${result.duplicates} ` +
-    `(ebből vízjel miatt kihagyva: ${result.skipped_by_watermark}), kézzel feloldott: ${result.manually_resolved}` +
-    `${result.state_reset ? ', FIGYELEM: a vízjel-ellenőrzés visszaállt (a fájl átrendeződhetett)' : ''}.`,
-  );
+  SpreadsheetApp.getUi().alert('A befizetés-import a helyreállítás alatt ki van kapcsolva.');
 }
 
 function refreshEmailDrafts() {
-  const result = callEmailEndpoint_('drafts');
+  const ui = SpreadsheetApp.getUi();
+  const response = ui.prompt(
+    'Importált Gravity Forms ID-k',
+    'Csak az imént sikeresen importált ID-k vesszővel elválasztott listáját add meg. Régi állományból nem készül új piszkozat.',
+    ui.ButtonSet.OK_CANCEL,
+  );
+  if (response.getSelectedButton() !== ui.Button.OK) return;
+  const entryIds = response.getResponseText().split(',').map((value) => value.trim()).filter(Boolean);
+  if (!entryIds.length || new Set(entryIds).size !== entryIds.length) {
+    return ui.alert('Adj meg legalább egy egyedi Gravity Forms ID-t.');
+  }
+  const result = callEmailEndpoint_('drafts', { entry_ids: entryIds });
   SpreadsheetApp.getUi().alert(
     `Piszkozatok frissítve. Feldolgozott: ${result.processed}, küldhető: ${result.ready}, kézi: ${result.manual}.`,
   );
@@ -145,7 +102,7 @@ function sendApprovedEmails() {
   );
 }
 
-function callEmailEndpoint_(action) {
+function callEmailEndpoint_(action, payload = {}) {
   const ui = SpreadsheetApp.getUi();
   const token = PropertiesService.getScriptProperties().getProperty(BUDAI_TANC_SYNC.emailTokenProperty);
   if (!token) {
@@ -156,7 +113,7 @@ function callEmailEndpoint_(action) {
     `${BUDAI_TANC_SYNC.endpoint}/emails/${action}/${encodeURIComponent(token)}`,
     {
       method: 'post', contentType: 'application/json',
-      payload: JSON.stringify({ pipeline_id: BUDAI_TANC_SYNC.pipelineId }),
+      payload: JSON.stringify({ pipeline_id: BUDAI_TANC_SYNC.pipelineId, ...payload }),
       muteHttpExceptions: true,
     },
   );
@@ -164,6 +121,60 @@ function callEmailEndpoint_(action) {
   const body = response.getContentText();
   if (status < 200 || status >= 300) throw new Error(`Az e-mail művelet nem sikerült (HTTP ${status}): ${body}`);
   return JSON.parse(body);
+}
+
+function protectRegistrationSourceColumns() {
+  const sheet = SpreadsheetApp.getActiveSheet();
+  const header = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0];
+  if (header[0] !== 'Közlemény') {
+    throw new Error('Nyisd meg a fő regisztrációs lapot, majd futtasd újra a védelmet.');
+  }
+  const editableHeaders = new Set([
+    'I. féléves tandíj', 'I. féléves tandíjfizetés dátuma', 'I. tagsági kiállítva',
+    'Egyéb megjegyzés', 'Más óraszámban jár', 'II. féléves tandíj befizetés dátuma',
+  ]);
+  const sourceColumns = header
+    .map((name, index) => ({ name: String(name || '').trim(), column: index + 1 }))
+    .filter(({ name }) => name && !editableHeaders.has(name))
+    .map(({ column }) => column);
+  const currentUser = Session.getEffectiveUser();
+  const groups = contiguousColumns_(sourceColumns);
+  groups.forEach(([start, width]) => {
+    const range = sheet.getRange(1, start, sheet.getMaxRows(), width);
+    const description = `Budai Tánc – védett forrásoszlopok (${start}-${start + width - 1})`;
+    const existing = range.getProtections(SpreadsheetApp.ProtectionType.RANGE)
+      .find((protection) => protection.getDescription() === description);
+    const protection = existing || range.protect().setDescription(description);
+    protection.addEditor(currentUser);
+    protection.removeEditors(protection.getEditors().filter((editor) => editor.getEmail() !== currentUser.getEmail()));
+    if (protection.canDomainEdit()) protection.setDomainEdit(false);
+  });
+  SpreadsheetApp.getActive().toast('A forrás- és azonosítóoszlopok védelme frissült.', 'Budai Tánc', 5);
+}
+
+function removePartialMasterFilter() {
+  const sheet = SpreadsheetApp.getActiveSheet();
+  const filter = sheet.getFilter();
+  if (filter) filter.remove();
+  SpreadsheetApp.getActive().toast('A kanonikus főlapon nincs részleges alapszűrő. Napi nézethez használj külön Filter view-t.', 'Budai Tánc', 6);
+}
+
+function contiguousColumns_(columns) {
+  if (!columns.length) return [];
+  const groups = [];
+  let start = columns[0];
+  let previous = start;
+  columns.slice(1).forEach((column) => {
+    if (column === previous + 1) {
+      previous = column;
+      return;
+    }
+    groups.push([start, previous - start + 1]);
+    start = column;
+    previous = column;
+  });
+  groups.push([start, previous - start + 1]);
+  return groups;
 }
 
 function onEdit(e) {

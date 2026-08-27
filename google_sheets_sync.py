@@ -11,21 +11,31 @@ from registration_model import SheetRecord
 
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"]
+
+
+def credentials_for(service_account_json: str | None, scopes: list[str]):
+    if service_account_json:
+        if service_account_json.lstrip().startswith("{"):
+            return Credentials.from_service_account_info(
+                json.loads(service_account_json), scopes=scopes
+            )
+        else:
+            return Credentials.from_service_account_file(
+                service_account_json, scopes=scopes
+            )
+    credentials, _project_id = google.auth.default(scopes=scopes)
+    return credentials
 
 
 def build_service(service_account_json: str | None):
-    if service_account_json:
-        if service_account_json.lstrip().startswith("{"):
-            credentials = Credentials.from_service_account_info(
-                json.loads(service_account_json), scopes=SCOPES
-            )
-        else:
-            credentials = Credentials.from_service_account_file(
-                service_account_json, scopes=SCOPES
-            )
-    else:
-        credentials, _project_id = google.auth.default(scopes=SCOPES)
+    credentials = credentials_for(service_account_json, SCOPES)
     return build("sheets", "v4", credentials=credentials)
+
+
+def build_drive_service(service_account_json: str | None):
+    credentials = credentials_for(service_account_json, DRIVE_SCOPES)
+    return build("drive", "v3", credentials=credentials)
 
 
 def resolve_tab_name(service, spreadsheet_id: str, requested_tab_name: str) -> str:

@@ -1,0 +1,24 @@
+{
+  "generated_at": "2026-08-27T13:31:53Z",
+  "mode": "append_only_csv_import",
+  "source_csv": "wordpress/tánctanfolyam-jelentkezés-2026-08-27.csv",
+  "source_csv_sha256": "d2cd6c4714ef59e4e4ee44f74efa8a1a417b9cf812313cae2791aba8ff10bc49",
+  "approved_plan_hash": "ed6a0ffdc79accfe5b9a0ddc254576fe859daca40989fce422e59f5aa0956eed",
+  "backup": {
+    "id": "11y5LJbBzHQKOyxKZDU78jDPmGJZs6pGfw-2gvepy-Zo",
+    "created_in_user_shared_folder": true,
+    "service_account_readback_verified": true
+  },
+  "execution": {
+    "written_new_records": 28,
+    "changed_existing_records": 0,
+    "email_drafts_created": 0,
+    "email_approvals_enabled": 0,
+    "brevo_messages_sent": 0
+  },
+  "post_import_same_csv_preview": {
+    "new_records": 0,
+    "skipped_existing_records": 76,
+    "recovered_from_email_history": 0
+  }
+}

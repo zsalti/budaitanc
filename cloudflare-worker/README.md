@@ -13,15 +13,13 @@ accounttal közvetlenül hívja, nincs szükség Google Cloud Runra.
    npx wrangler login
    ```
 
-2. Állítsd be a két titkot. A parancs kéri be az értéket, ezért nem kerül a
+2. Állítsd be a szükséges titkokat. A parancs kéri be az értéket, ezért nem kerül a
    terminál-előzménybe.
 
    ```bash
    npx wrangler secret put WEBHOOK_SHARED_SECRET
    npx wrangler secret put GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT
    npx wrangler secret put IMPORT_ADMIN_TOKEN
-   npx wrangler secret put SYNC_ADMIN_TOKEN
-   npx wrangler secret put PAYMENT_IMPORT_TOKEN
    npx wrangler secret put EMAIL_ADMIN_TOKEN
    npx wrangler secret put BREVO_API_KEY
    npx wrangler secret put BREVO_SENDER_EMAIL
@@ -41,7 +39,9 @@ accounttal közvetlenül hívja, nincs szükség Google Cloud Runra.
    npx wrangler secret put PIPELINES_CONFIG_JSON
    ```
 
-   A banki Excelhez külön forrás-beállítás is kell. A
+   A befizetés-import jelenleg le van tiltva, ezért a banki Excelhez tartozó
+   forrás-beállítás nem része az éles helyreállításnak. A történeti
+   dokumentációhoz használt
    `payments-source.json.example` alapján készítsd el, majd secretként add meg:
 
    ```bash
@@ -64,7 +64,7 @@ accounttal közvetlenül hívja, nincs szükség Google Cloud Runra.
    Ez nem érzékeny, de secretként kezeljük, hogy egyetlen helyen legyen a
    telepítési konfiguráció.
 
-4. Deploy:
+4. Biztonsági deploy (alapértelmezésben minden production-írást lezár):
 
    ```bash
    npx wrangler deploy
@@ -82,14 +82,15 @@ accounttal közvetlenül hívja, nincs szükség Google Cloud Runra.
 
    Várt válasz: `{"status":"ok"}`.
 
-6. A WordPress pluginban az `endpoint_url` értékét írd át erre:
+6. A Gravity Forms webhook maradjon kikapcsolva. Csak akkor térhet vissza,
+   ha ugyanazt a terv- és integritáskaput használja, mint a kézi CSV-import.
 
    `https://...workers.dev/webhooks/gravity-forms`
 
 ## Kézi CSV-import
 
-Az ügyfél a következő formájú URL-en tölthet fel teljes Gravity Forms
-tánctanfolyam-exportot:
+Az ügyfél a következő URL-en tölthet fel teljes Gravity Forms
+tánctanfolyam-exportot vagy csak friss jelentkezéseket tartalmazó CSV-t:
 
 `https://...workers.dev/import/<IMPORT_ADMIN_TOKEN>`
 
@@ -100,12 +101,79 @@ helyre. Ha később Access-védelemre váltunk, az engedélyezett címek:
 - `budaitancklub@kult2.hu`
 - `sziranyi.laura@kult2.hu`
 
-Az import kizárólag a teljes tanfolyam-export fejlécét fogadja el. A hiányos
-`gf_entry_4` exportot elutasítja. Meglévő rekordnál a J:M kézi oszlopok
-megmaradnak; a Gravity Forms bejegyzésazonosító a látható első, `Közlemény`
-oszlopban tárolódik.
+Az import azonos fejlécű teljes exportot vagy friss jelentkezőket tartalmazó
+CSV-t fogad. Először csak egy hash-elt előnézetet készít: felsorolja az új,
+a CSV-ben megtalálható, de már létező és ezért kihagyott ID-kat, valamint a
+CSV-ből hiányzó, érintetlenül maradó korábbi ID-kat. Az éles futtatás ugyanazt
+a CSV-t, változatlan Sheet-pillanatképet és tervhash-t követeli meg. Csak új
+ID kerülhet a főlap utolsó teljes rekordja után; meglévő sort nem frissít és
+e-mailt sem készít.
+
+Az `E-mail kimenet` előzményében már szereplő, de a főlapról hiányzó ID az
+importtervben külön látszik. A rekord helyreállítható, de korábbi Brevo- vagy
+kézi küldési bizonyíték mellett új levél nem készül.
+
+### Karbantartási kapcsoló
+
+`RECOVERY_MAINTENANCE_MODE` alapértéke zárt: az értéke csak a külön
+ellenőrzött újraindításkor lehet `off`. Nyitott állapotban is minden művelet
+előtt ellenőrzi a Worker az ID-k egyediségét, a fejlécet és azt, hogy nincs
+részleges alapszűrő (például `B:AI`) a főlapon.
+
+Az e-mail-piszkozatokhoz az Apps Script a frissen importált Gravity Forms
+ID-k külön listáját kéri. Import és piszkozatfrissítés sosem kapcsol be
+jóváhagyást és sosem küld Brevo-levelet.
+
+Az importterv ellenőrzése után, de az éles végrehajtás előtt készíts friss
+Drive-másolatot. A parancs kiírja a backup ID-t; ezt kell az importoldal
+utolsó lépésében megadni.
+
+```bash
+python3 scripts/create_production_sheet_backup.py \
+  --report reports/import-backup-YYYY-MM-DD.json
+```
+
+### Ellenőrzött staging-visszaállítás
+
+A visszaállító parancs kétszer olvassa a staging és production Sheetet,
+összeveti az incidensben rögzített hash-ekkel, és a staging állapotból dolgozik
+— nem a sérült production tartalomból próbál következtetni. Az `--execute`
+előtt Drive-másolatot készít, hiba esetén pedig a megőrzött Sheet-snapshotot
+automatikusan visszaírja. Nem hív Workert vagy Brevót.
+
+```bash
+# csak olvasás és preflight
+python3 scripts/restore_from_verified_staging.py \
+  --staging-spreadsheet-id '<ellenőrzött-staging-id>' \
+  --report reports/incident-restore-preflight-YYYY-MM-DD.json
+
+# csak jóváhagyott preflight után
+python3 scripts/restore_from_verified_staging.py \
+  --staging-spreadsheet-id '<ellenőrzött-staging-id>' \
+  --report reports/incident-restore-YYYY-MM-DD.json \
+  --execute --acknowledge-no-email-send
+```
+
+Ha a szolgáltatási fiók Drive-kvótája megtelt, egy másik, kellő tárhellyel
+rendelkező tulajdonos készítsen **Google Sheets-másolatot** a production
+fájlról, és ossza meg azt a szolgáltatási fiókkal. A megosztott `Saját
+meghajtó` mappa önmagában nem adja át a tulajdonosi kvótát. A futtatás előtt
+a szkript kétszeri olvasással igazolja, hogy a megadott másolat minden érintett
+lapja a közvetlenül előtte olvasott production-állapottal egyezik:
+
+```bash
+python3 scripts/restore_from_verified_staging.py \
+  --staging-spreadsheet-id '<ellenőrzött-staging-id>' \
+  --existing-backup-id '<ember által készített, megosztott backup-id>' \
+  --report reports/incident-restore-YYYY-MM-DD.json \
+  --execute --acknowledge-no-email-send
+```
 
 ## Munkatársi Sheet szinkron
+
+**Jelenleg letiltva.** A `/sync/` végpont minden tokennel `410 disabled`
+választ ad, és az Apps Script menüből is eltűnt. Az alábbi szöveg csak a
+korábbi működés leírása; ne indítsd el a helyreállítás részeként.
 
 A pipeline `staff_target` beállítása esetén a Worker minden új webhook- és
 CSV-rekordot a fő Sheet mellett a munkatársi Sheetbe is beír. A teljes
@@ -125,6 +193,10 @@ jelentkezés után később rögzített befizetések is átkerülnek, új sor l�
 nélkül.
 
 ## Befizetések érkeztetése
+
+**Jelenleg letiltva.** A `/payments/` végpont minden tokennel `410 disabled`
+választ ad, és nincs hozzá menüpont vagy tokenbeállítás. A pénzügyi kód és az
+adatok megmaradtak, de nem részei ennek a helyreállításnak.
 
 A fő Sheethez kötött Apps Scriptben a `Budai Tánc → Befizetések érkeztetése`
 menüpont indítja a feldolgozást. Az első futás előtt a `Budai Tánc →
@@ -173,8 +245,9 @@ A Worker a `Tanfolyamok` fül strukturált órarendjéből, díjsávjaiból és
 kivételeiből számol. Ez az egyetlen kézzel karbantartott tanfolyamforrás: egy
 heti alkalom egy sor, a többalkalmas tanfolyamok sorai ugyanazt a tanfolyamkulcsot
 használják. A rejtett `Automata kalk` fül csak automatikus kompatibilitási tükör,
-nem szerkesztendő. Új webhook/CSV rekord után a Worker automatikusan frissíti a
-fő Sheet AH:AR automatizálási mezőit és az `E-mail kimenet` piszkozatát.
+nem szerkesztendő. A helyreállítás alatt új webhook/CSV rekord után nincs
+automatikus e-mail-piszkozat: azt csak a frissen importált ID-k külön,
+ellenőrizhető kérése indíthatja.
 
 - A próbaóra díja fix 2600 Ft, és a `Próbaóra dátuma` szerinti órát ellenőrzi.
 - Tanfolyamnál a jelentkezés és a kért kezdés közül a későbbi naptól keresi az
@@ -312,17 +385,16 @@ secret put` interaktív parancsot használd.
 npm run check
 npm run test:fee
 npm run test:email
+npm run test:integrity
 npm run test:smoke
-npm run generate:payment-fixture
 ```
 
 A `test-fixtures/dami-registration.csv` egy teljes, személyes adatot nem
-tartalmazó dummy export. A smoke teszt ellenőrzi az új rekord beszúrását, az
-azonos rekord frissítését, a J:N mezők megőrzését, a hibás fejléc elutasítását,
-a próbaóradátum mappelését, a 10 e-mail-forgatókönyvet, a revízióhoz kötött
-jóváhagyást, az idempotens Brevo-kérést és a kézbesítési webhookot. Production smoke teszt esetén a
-`TEST-CODEX-20260723-001` és `TEST-WEBHOOK-001` azonosítókat a végén célzottan
-ellenőrizni és törölni kell.
+tartalmazó dummy export. A smoke teszt a tervhez kötött append-only importot,
+a karbantartási zárat, a letiltott pénzügyi és munkatársi végpontot, valamint
+az e-mail-piszkozat elkülönítését ellenőrzi. Az integritási teszt külön fedi a
+duplikált/hiányzó ID-kat, a régi rekord módosításának elutasítását és a
+részleges alapszűrőt.
 
 ### Incidens forrásaudit (csak olvasás)
 

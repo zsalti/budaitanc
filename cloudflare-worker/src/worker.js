@@ -1,6 +1,15 @@
 import * as XLSX from "xlsx";
 import { AUTOMATION_STATUS, calculateRegistration, formatDate, parseAutomationConfig } from "./fee-engine.js";
 import {
+  appendStartRow,
+  assertNoPartialBasicFilter,
+  buildAppendOnlyImportPlan,
+  semanticHash,
+  sourceMatchesMaster,
+  validateEmailRows,
+  validateMasterRows,
+} from "./recovery-integrity.js";
+import {
   EMAIL_EVENT,
   TEMPLATE_VERSION,
   brevoTemplateDefinitions,
@@ -116,12 +125,12 @@ export default {
 
     const syncToken = getProtectedPathToken(url.pathname, SYNC_PATH_PREFIX);
     if (syncToken !== null) {
-      return handleSync(request, env, syncToken);
+      return disabledEndpoint("A teljes munkatársi Sheet-szinkron a helyreállítás alatt ki van kapcsolva.");
     }
 
     const paymentToken = getProtectedPathToken(url.pathname, PAYMENTS_PATH_PREFIX);
     if (paymentToken !== null) {
-      return handlePaymentsImport(request, env, paymentToken);
+      return disabledEndpoint("A befizetések érkeztetése a helyreállítás alatt ki van kapcsolva.");
     }
 
     const draftToken = getProtectedPathToken(url.pathname, EMAIL_DRAFTS_PATH_PREFIX);
@@ -155,32 +164,7 @@ export default {
       return json({ error: "unauthorized" }, 401);
     }
 
-    let payload;
-    try {
-      payload = await request.json();
-    } catch {
-      return json({ error: "invalid_json" }, 400);
-    }
-    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-      return json({ error: "invalid_payload" }, 400);
-    }
-
-    try {
-      const pipeline = getPipeline(env, text(payload.pipeline_id));
-      const registration = registrationFromPayload(pipeline.adapter, payload);
-      const accessToken = await getGoogleAccessToken(env.GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT);
-      const result = await writeRegistrationsToTargets(accessToken, pipeline, [registration]);
-      return json({
-        status: "ok",
-        pipeline_id: text(payload.pipeline_id),
-        row_index: result.results[0].rowIndex,
-        student_name: registration.studentName,
-        automation: result.automation?.[0] || null,
-      });
-    } catch (error) {
-      console.error("Webhook processing failed", error);
-      return json({ error: "processing_failed" }, 500);
-    }
+    return disabledEndpoint("A Gravity Forms webhook a helyreállítás alatt ki van kapcsolva; csak a kézi CSV-importtal azonos integritási kapu után térhet vissza.");
   },
 };
 
@@ -193,6 +177,19 @@ async function handleImport(request, env, token) {
 
   try {
     const form = await request.formData();
+    const requestedMode = text(form.get("mode")).toLowerCase() || "plan";
+    if (!["plan", "execute", "drafts"].includes(requestedMode)) {
+      return html(importPage("Érvénytelen importmód.", 400), 400);
+    }
+    if (requestedMode === "drafts") {
+      if (recoveryMaintenanceEnabled(env)) return maintenanceHtmlResponse();
+      const grant = await verifyImportDraftGrant(env, text(form.get("draft_grant")));
+      const pipeline = getPipeline(env, grant.pipelineId);
+      const accessToken = await getGoogleAccessToken(env.GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT);
+      const automation = await refreshEmailDrafts(accessToken, pipeline, grant.entryIds);
+      return html(importDraftResultPage(automation));
+    }
+
     const file = form.get("file");
     if (!file || typeof file.text !== "function") {
       return html(importPage("Nem található CSV fájl.", 400), 400);
@@ -202,16 +199,55 @@ async function handleImport(request, env, token) {
     const registrations = parseCsvRegistrations(parsed);
     const pipeline = getPipeline(env, text(form.get("pipeline_id")) || defaultPipelineId(env));
     const accessToken = await getGoogleAccessToken(env.GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT);
-    const { newRegistrations, skippedRegistrations } = await filterManualImportRegistrations(
+    const snapshot = await readImportSnapshot(accessToken, pipeline);
+    const plan = await buildAppendOnlyImportPlan({
+      csvText,
+      registrations,
+      masterRows: snapshot.masterRows,
+      emailRows: snapshot.emailRows,
+    });
+    if (requestedMode === "plan") return html(importPlanPage(plan, registrations.length));
+    if (recoveryMaintenanceEnabled(env)) return maintenanceHtmlResponse();
+    if (!safeEqual(text(form.get("plan_hash")), plan.plan_hash)) {
+      return html(importPage("Az importterv hash-e nem egyezik. Készíts új előnézetet ugyanazzal a CSV-vel.", 409), 409);
+    }
+    const backup = await verifyImportBackup(
+      accessToken,
+      pipeline.spreadsheet_id,
+      text(form.get("backup_id")),
+    );
+
+    // A terv egy gyors, megelőző olvasás. Közvetlenül írás előtt még egyszer
+    // teljesen újraépítjük; bármilyen köztes Sheet-változás megakasztja a futást.
+    const executionSnapshot = await readImportSnapshot(accessToken, pipeline);
+    const executionPlan = await buildAppendOnlyImportPlan({
+      csvText,
+      registrations,
+      masterRows: executionSnapshot.masterRows,
+      emailRows: executionSnapshot.emailRows,
+    });
+    if (!safeEqual(plan.plan_hash, executionPlan.plan_hash)) {
+      return html(importPage("A Sheet az előnézet óta megváltozott. Készíts új importtervet.", 409), 409);
+    }
+    const result = await appendOnlyMasterRegistrations(
       accessToken,
       pipeline,
-      registrations,
+      executionSnapshot.masterRows,
+      executionPlan,
     );
-    const result = newRegistrations.length
-      ? await writeRegistrationsToTargets(accessToken, pipeline, newRegistrations)
-      : { results: [] };
-    result.skipped = skippedRegistrations;
-    return html(importResultPage(result, registrations.length));
+    console.info("CSV import completed", JSON.stringify({
+      pipeline_id: pipeline.pipeline_id,
+      filename: text(file.name),
+      rows: registrations.length,
+      written: result.results.length,
+      recovered_from_email_history: executionPlan.recovered_from_email_history.length,
+      skipped_existing_master: executionPlan.skipped_existing_master.length,
+      plan_hash: executionPlan.plan_hash,
+    }));
+    const draftGrant = executionPlan.new_entry_ids.length
+      ? await issueImportDraftGrant(env, pipeline.pipeline_id, executionPlan.new_entry_ids)
+      : "";
+    return html(importResultPage(result, registrations.length, executionPlan, backup, draftGrant));
   } catch (error) {
     console.error("CSV import failed", error);
     return html(importPage(error.message || "Az import nem sikerült.", 400), 400);
@@ -245,11 +281,13 @@ async function handleEmailDraftRefresh(request, env, token) {
     return json({ error: "not_found" }, 404);
   }
   if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
+  if (recoveryMaintenanceEnabled(env)) return maintenanceResponse();
   try {
     const payload = await optionalJson(request);
     const pipeline = getPipeline(env, text(payload.pipeline_id) || defaultPipelineId(env));
+    const entryIds = parseRequestedEntryIds(payload.entry_ids);
     const accessToken = await getGoogleAccessToken(env.GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT);
-    const automation = await refreshEmailDrafts(accessToken, pipeline, null);
+    const automation = await refreshEmailDrafts(accessToken, pipeline, entryIds);
     return json({ status: "ok", pipeline_id: pipeline.pipeline_id, ...automation });
   } catch (error) {
     console.error("Email draft refresh failed", error);
@@ -265,6 +303,7 @@ async function handleEmailReferenceReconciliation(request, env, token) {
     return json({ error: "not_found" }, 404);
   }
   if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
+  if (recoveryMaintenanceEnabled(env)) return maintenanceResponse();
   try {
     const payload = await optionalJson(request);
     const pipeline = getPipeline(env, text(payload.pipeline_id) || defaultPipelineId(env));
@@ -282,6 +321,7 @@ async function handleApprovedEmailSend(request, env, token) {
     return json({ error: "not_found" }, 404);
   }
   if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
+  if (recoveryMaintenanceEnabled(env)) return maintenanceResponse();
   try {
     const payload = await optionalJson(request);
     const pipeline = getPipeline(env, text(payload.pipeline_id) || defaultPipelineId(env));
@@ -299,6 +339,7 @@ async function handleEmailSetup(request, env, token) {
     return json({ error: "not_found" }, 404);
   }
   if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
+  if (recoveryMaintenanceEnabled(env)) return maintenanceResponse();
   try {
     const payload = await optionalJson(request);
     const pipeline = getPipeline(env, text(payload.pipeline_id) || defaultPipelineId(env));
@@ -317,6 +358,7 @@ async function handleBrevoWebhook(request, env) {
       || !safeEqual(request.headers.get("X-BudaiTanc-Brevo-Secret") || "", env.BREVO_WEBHOOK_SECRET)) {
     return json({ error: "unauthorized" }, 401);
   }
+  if (recoveryMaintenanceEnabled(env)) return maintenanceResponse();
   let payload;
   try { payload = await request.json(); }
   catch { return json({ error: "invalid_json" }, 400); }
@@ -337,6 +379,81 @@ async function handleBrevoWebhook(request, env) {
 async function optionalJson(request) {
   const raw = await request.text();
   return raw.trim() ? JSON.parse(raw) : {};
+}
+
+function parseRequestedEntryIds(value) {
+  if (!Array.isArray(value)) {
+    throw new Error("Az e-mail-piszkozatokhoz kötelező az épp importált ID-k entry_ids tömbje.");
+  }
+  const entryIds = [...new Set(value.map((entryId) => text(entryId)).filter(Boolean))];
+  if (!entryIds.length) throw new Error("Nincs megadott importált ID az e-mail-piszkozatokhoz.");
+  if (entryIds.length !== value.length) {
+    throw new Error("Az e-mail-piszkozatokhoz megadott ID-k üresek vagy duplikáltak.");
+  }
+  return new Set(entryIds);
+}
+
+async function issueImportDraftGrant(env, pipelineId, entryIds) {
+  const payload = JSON.stringify({
+    pipeline_id: pipelineId,
+    entry_ids: [...entryIds],
+    expires_at: Math.floor(Date.now() / 1000) + 15 * 60,
+  });
+  return `${base64Url(payload)}.${await hmacSha256(env.IMPORT_ADMIN_TOKEN, payload)}`;
+}
+
+async function verifyImportDraftGrant(env, grant) {
+  const [encodedPayload, signature, ...extra] = text(grant).split(".");
+  if (!encodedPayload || !signature || extra.length) {
+    throw new Error("A piszkozatkészítő jogosultság hiányzik vagy sérült. Indíts új import-előnézetet.");
+  }
+  let payload;
+  try {
+    const padded = encodedPayload.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(encodedPayload.length / 4) * 4, "=");
+    payload = new TextDecoder().decode(Uint8Array.from(atob(padded), (char) => char.charCodeAt(0)));
+  } catch {
+    throw new Error("A piszkozatkészítő jogosultság olvashatatlan. Indíts új import-előnézetet.");
+  }
+  if (!safeEqual(signature, await hmacSha256(env.IMPORT_ADMIN_TOKEN, payload))) {
+    throw new Error("A piszkozatkészítő jogosultság érvénytelen. Indíts új import-előnézetet.");
+  }
+  let parsed;
+  try { parsed = JSON.parse(payload); }
+  catch { throw new Error("A piszkozatkészítő jogosultság hibás. Indíts új import-előnézetet."); }
+  if (!parsed || typeof parsed !== "object" || !text(parsed.pipeline_id)
+      || Number(parsed.expires_at) < Math.floor(Date.now() / 1000)) {
+    throw new Error("A piszkozatkészítő jogosultság lejárt. Készíts új import-előnézetet.");
+  }
+  return { pipelineId: text(parsed.pipeline_id), entryIds: parseRequestedEntryIds(parsed.entry_ids) };
+}
+
+async function hmacSha256(secret, payload) {
+  const key = await crypto.subtle.importKey(
+    "raw", new TextEncoder().encode(String(secret)), { name: "HMAC", hash: "SHA-256" }, false, ["sign"],
+  );
+  const signature = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(payload)));
+  return [...signature].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function recoveryMaintenanceEnabled(env) {
+  // A deploy alapértelmezésben zárva indul. A visszaállítás utáni, külön
+  // ellenőrzött újraindítás állíthatja csak explicit \"off\" értékre.
+  return text(env.RECOVERY_MAINTENANCE_MODE).toLowerCase() !== "off";
+}
+
+function maintenanceResponse() {
+  return json({
+    error: "maintenance_mode",
+    message: "A regisztrációs helyreállítás karbantartási módja aktív; production-írás nem engedélyezett.",
+  }, 503);
+}
+
+function maintenanceHtmlResponse() {
+  return html(importPage("A helyreállítás karbantartási módja aktív; az importterv elkészíthető, de éles írás nem engedélyezett.", 503), 503);
+}
+
+function disabledEndpoint(message) {
+  return json({ error: "disabled", message }, 410);
 }
 
 function getImportToken(pathname) {
@@ -930,23 +1047,111 @@ async function filterManualImportRegistrations(accessToken, pipeline, registrati
   return partitionManualImportRegistrations(masterRows, emailRows, registrations);
 }
 
+async function readImportSnapshot(accessToken, pipeline) {
+  const [metadata, masterRows, emailRows] = await Promise.all([
+    getSpreadsheetMetadata(accessToken, pipeline.spreadsheet_id),
+    readSheetRows(accessToken, pipeline.spreadsheet_id, pipeline.tab_name, "A:AT"),
+    readSheetRows(accessToken, pipeline.spreadsheet_id, EMAIL_OUTPUT_TAB, "A:AH"),
+  ]);
+  const master = validateMasterRows(masterRows);
+  validateEmailRows(emailRows);
+  assertNoPartialBasicFilter(metadata, pipeline.tab_name, master.header.length);
+  return { metadata, masterRows, emailRows };
+}
+
+async function appendOnlyMasterRegistrations(accessToken, pipeline, beforeRows, plan) {
+  if (!plan.newRegistrations.length) {
+    return { results: [], verification: { old_records_unchanged: true, appended_records: 0 } };
+  }
+  const startRow = appendStartRow(beforeRows);
+  if (startRow !== plan.append_start_row) {
+    throw new Error("Az import append kezdősora eltér az elfogadott tervtől.");
+  }
+  const data = plan.newRegistrations.flatMap((registration, offset) => {
+    const rowIndex = startRow + offset;
+    const row = [registration.entryId, ...registration.row];
+    return [
+      { range: `${quoteSheetName(pipeline.tab_name)}!A${rowIndex}:I${rowIndex}`, values: [row.slice(0, 9)] },
+      { range: `${quoteSheetName(pipeline.tab_name)}!O${rowIndex}:AA${rowIndex}`, values: [row.slice(14, 27)] },
+      { range: `${quoteSheetName(pipeline.tab_name)}!${TRIAL_DATE_COLUMN}${rowIndex}`, values: [[registration.trialDate || ""]] },
+    ];
+  });
+  await writeSheetRanges(accessToken, pipeline.spreadsheet_id, data);
+
+  const afterRows = await readSheetRows(accessToken, pipeline.spreadsheet_id, pipeline.tab_name, "A:AT");
+  await verifyAppendOnlyImport(beforeRows, afterRows, plan);
+  return {
+    results: plan.newRegistrations.map((registration, offset) => ({
+      rowIndex: startRow + offset,
+      type: "created",
+      studentName: registration.studentName,
+    })),
+    verification: {
+      old_records_unchanged: true,
+      appended_records: plan.newRegistrations.length,
+    },
+  };
+}
+
+async function verifyImportBackup(accessToken, productionSpreadsheetId, backupId) {
+  if (!backupId) throw new Error("Az éles importhoz kötelező a frissen elkészített Drive-backup azonosítója.");
+  if (backupId === productionSpreadsheetId) throw new Error("A backup nem lehet azonos a production Sheettel.");
+  const url = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(backupId)}?fields=id,name,mimeType,createdTime,trashed`;
+  const backup = await googleFetch(url, accessToken);
+  if (backup.trashed || backup.mimeType !== "application/vnd.google-apps.spreadsheet") {
+    throw new Error("A megadott backup nem elérhető Google Sheets Drive-másolat.");
+  }
+  return { id: text(backup.id), created_at: text(backup.createdTime) };
+}
+
+async function verifyAppendOnlyImport(beforeRows, afterRows, plan) {
+  const before = validateMasterRows(beforeRows);
+  const after = validateMasterRows(afterRows);
+  const afterById = new Map(after.records.map((record) => [record.entryId, record]));
+  for (const record of before.records) {
+    const actual = afterById.get(record.entryId);
+    if (!actual || await semanticHash([actual.row]) !== await semanticHash([record.row])) {
+      throw new Error(`Az import módosított vagy elveszített egy régi rekordot: ${record.entryId}.`);
+    }
+  }
+  const expectedNewIds = new Set(plan.newRegistrations.map((registration) => registration.entryId));
+  const actualNewIds = after.records
+    .map((record) => record.entryId)
+    .filter((entryId) => !before.entryIds.has(entryId));
+  if (actualNewIds.length !== expectedNewIds.size || actualNewIds.some((entryId) => !expectedNewIds.has(entryId))) {
+    throw new Error("Az import után a fő Sheetben nem pontosan a tervezett új ID-k jelentek meg.");
+  }
+  for (const registration of plan.newRegistrations) {
+    const record = afterById.get(registration.entryId);
+    if (!record || record.rowIndex < plan.append_start_row || !sourceMatchesMaster(registration, record.row)) {
+      throw new Error(`Az importált rekord visszaolvasása eltér: ${registration.entryId}.`);
+    }
+  }
+}
+
 function partitionManualImportRegistrations(masterRows, emailRows, registrations) {
-  const knownEntryIds = new Set([
-    ...masterRows.slice(1).map((row) => text(row[0])),
-    ...emailRows.slice(1).map((row) => text(row[0])),
-  ].filter(Boolean));
+  const masterEntryIds = new Set(masterRows.slice(1).map((row) => text(row[0])).filter(Boolean));
+  const emailEntryIds = new Set(emailRows.slice(1).map((row) => text(row[0])).filter(Boolean));
+  const seenInputEntryIds = new Set();
   const newRegistrations = [];
-  const skippedRegistrations = [];
+  const recoveredRegistrations = [];
+  const skippedExistingMaster = [];
+  const skippedDuplicateInFile = [];
 
   for (const registration of registrations) {
-    if (knownEntryIds.has(registration.entryId)) {
-      skippedRegistrations.push(registration);
+    if (seenInputEntryIds.has(registration.entryId)) {
+      skippedDuplicateInFile.push(registration);
       continue;
     }
-    knownEntryIds.add(registration.entryId);
+    seenInputEntryIds.add(registration.entryId);
+    if (masterEntryIds.has(registration.entryId)) {
+      skippedExistingMaster.push(registration);
+      continue;
+    }
+    if (emailEntryIds.has(registration.entryId)) recoveredRegistrations.push(registration);
     newRegistrations.push(registration);
   }
-  return { newRegistrations, skippedRegistrations };
+  return { newRegistrations, recoveredRegistrations, skippedExistingMaster, skippedDuplicateInFile };
 }
 
 function registrationFromCsvRow(row) {
@@ -1377,15 +1582,20 @@ async function loadEmailSettings(accessToken, pipeline) {
 }
 
 async function refreshEmailDrafts(accessToken, pipeline, entryIds = null) {
-  const [masterRows, configRows, emailRows, emailSettings] = await Promise.all([
+  if (!(entryIds instanceof Set) || !entryIds.size) {
+    throw new Error("Az e-mail-piszkozatok kizárólag név szerint megadott, frissen importált ID-khoz készülhetnek.");
+  }
+  const [masterRows, configRows, emailRows, emailSettings, metadata] = await Promise.all([
     readSheetRows(accessToken, pipeline.spreadsheet_id, pipeline.tab_name, "A:AT"),
     readSheetRows(accessToken, pipeline.spreadsheet_id, AUTOMATION_CONFIG_TAB, "A:Y"),
     readSheetRows(accessToken, pipeline.spreadsheet_id, EMAIL_OUTPUT_TAB, "A:AH"),
     loadEmailSettings(accessToken, pipeline),
+    getSpreadsheetMetadata(accessToken, pipeline.spreadsheet_id),
   ]);
-  if (text(masterRows[0]?.[0]) !== "Közlemény") throw new Error("A fő Sheet első oszlopa nem Közlemény.");
+  const master = validateMasterRows(masterRows);
+  validateEmailRows(emailRows);
+  assertNoPartialBasicFilter(metadata, pipeline.tab_name, master.header.length);
   if (text(configRows[0]?.[0]) !== "Tanfolyam kulcs") throw new Error("A Tanfolyamok központi órarend-fejléce hiányzik.");
-  if (text(emailRows[0]?.[0]) !== "Küldési kulcs") throw new Error("Az E-mail kimenet fejléce hiányzik.");
 
   const config = parseAutomationConfig(configRows);
   const mutableEmailRows = emailRows.map((row) => [...row]);
@@ -1485,13 +1695,13 @@ async function refreshEmailDrafts(accessToken, pipeline, entryIds = null) {
 
     const periodKey = emailPeriodKey(registration, calculation);
     const sendKey = `${entryId}|${eventType}|${periodKey}|${TEMPLATE_VERSION}`;
-    if (hasLegacyManualEmailHistory(mutableEmailRows, entryId, registration.email)) {
+    if (hasPriorEmailSendEvidence(mutableEmailRows, entryId, registration.email)) {
       results.push({
         entry_id: entryId,
         row_index: mainRow,
         event_type: eventType,
         status: AUTOMATION_STATUS.MANUAL,
-        reason: "Korábbi rendszerben manuálisan elküldve; automatikus piszkozat nem készül.",
+        reason: "Korábbi Brevo- vagy kézi küldési bizonyíték létezik; második levél nem készül.",
         fee: calculation.fee || "",
         first_class: firstClassValue,
       });
@@ -1820,6 +2030,19 @@ function findExistingEmailRow(rows, sendKey, entryId, eventType, periodKey, reci
   };
 }
 
+function hasPriorEmailSendEvidence(rows, entryId, recipient) {
+  return rows.some((emailRow, emailIndex) => (
+    emailIndex > 0
+    && text(emailRow[EMAIL_COLUMN.ENTRY_ID]) === entryId
+    && sameRecipient(emailRow[EMAIL_COLUMN.TO], recipient)
+    && (
+      isChecked(emailRow[EMAIL_COLUMN.MANUAL_SENT])
+      || Boolean(text(emailRow[EMAIL_COLUMN.MESSAGE_ID]))
+      || isFinalEmailStatus(text(emailRow[EMAIL_COLUMN.STATUS]))
+    )
+  ));
+}
+
 function hasLegacyManualEmailHistory(rows, entryId, recipient) {
   return rows.some((emailRow, emailIndex) => (
     emailIndex > 0
@@ -1846,8 +2069,11 @@ function emailPeriodKeyFromRow(row) {
 }
 
 function firstEmptyRow(rows, keyColumn) {
-  for (let index = 1; index < rows.length; index += 1) if (!text(rows[index]?.[keyColumn - 1])) return index + 1;
-  return Math.max(2, rows.length + 1);
+  let lastRecordRow = 1;
+  for (let index = 1; index < rows.length; index += 1) {
+    if (text(rows[index]?.[keyColumn - 1])) lastRecordRow = index + 1;
+  }
+  return lastRecordRow + 1;
 }
 
 async function emailRevisionHashFromRow(row) {
@@ -2003,8 +2229,14 @@ function brevoNextStatus(current, incoming) {
 
 async function sendApprovedEmails(accessToken, pipeline, env) {
   if (!env.BREVO_API_KEY || !env.BREVO_SENDER_EMAIL) throw new Error("Hiányzik a BREVO_API_KEY vagy a BREVO_SENDER_EMAIL Worker secret.");
-  const rows = await readSheetRows(accessToken, pipeline.spreadsheet_id, EMAIL_OUTPUT_TAB, "A:AH");
-  if (text(rows[0]?.[0]) !== "Küldési kulcs") throw new Error("Az E-mail kimenet fejléce hiányzik.");
+  const [rows, masterRows, metadata] = await Promise.all([
+    readSheetRows(accessToken, pipeline.spreadsheet_id, EMAIL_OUTPUT_TAB, "A:AH"),
+    readSheetRows(accessToken, pipeline.spreadsheet_id, pipeline.tab_name, "A:AT"),
+    getSpreadsheetMetadata(accessToken, pipeline.spreadsheet_id),
+  ]);
+  const master = validateMasterRows(masterRows);
+  validateEmailRows(rows);
+  assertNoPartialBasicFilter(metadata, pipeline.tab_name, master.header.length);
   let accepted = 0;
   let skipped = 0;
   let failed = 0;
@@ -2193,7 +2425,7 @@ async function appendSheetRows(accessToken, spreadsheetId, tabName, values) {
 
 async function getSpreadsheetMetadata(accessToken, spreadsheetId) {
   const baseUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}`;
-  return googleFetch(`${baseUrl}?fields=sheets(properties(sheetId,title,gridProperties(columnCount)),conditionalFormats)`, accessToken);
+  return googleFetch(`${baseUrl}?fields=sheets(properties(sheetId,title,gridProperties(rowCount,columnCount)),basicFilter,conditionalFormats)`, accessToken);
 }
 
 function spreadsheetColumnNumber(column) {
@@ -2268,13 +2500,27 @@ function json(payload, status = 200) { return new Response(JSON.stringify(payloa
 function html(body, status = 200) { return new Response(body, { status, headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" } }); }
 
 function importPage(message = "", status = 200) {
-  return `<!doctype html><meta charset="utf-8"><title>Rényike nénike tánctanfolyam import muri</title><style>body{font:16px system-ui;max-width:680px;margin:48px auto;padding:0 20px}main{border:1px solid #ddd;border-radius:12px;padding:24px}input,button{font:inherit;margin-top:12px}button{padding:10px 16px;cursor:pointer}.error{color:#a00;white-space:pre-wrap}</style><main><h1>Rényike nénike tánctanfolyam import muri</h1><p>Tölts fel szépen egy csv fájlt, amit innen szedsz le: <a href="https://kult2.hu/wp-admin/admin.php?page=gf_export" target="_blank" rel="noopener noreferrer">https://kult2.hu/wp-admin/admin.php?page=gf_export</a></p>${message ? `<p class="error">${escapeHtml(message)}</p>` : ""}<form method="post" enctype="multipart/form-data"><input type="file" name="file" accept=".csv,text/csv" required><br><button>Importálás</button></form></main>`;
+  return `<!doctype html><meta charset="utf-8"><title>Gravity Forms import</title><style>body{font:16px system-ui;max-width:720px;margin:48px auto;padding:0 20px}main{border:1px solid #ddd;border-radius:12px;padding:24px}input,button{font:inherit;margin-top:12px}button{padding:10px 16px;cursor:pointer}.error{color:#a00;white-space:pre-wrap}.note{color:#435}</style><main><h1>Gravity Forms import</h1><p>Először csak ellenőrizhető terv készül. A rendszer kizárólag új ID-kat írhat a főlap végére; e-mailt nem készít és nem küld.</p><p>Tölthetsz fel teljes Gravity Forms exportot vagy csak a friss jelentkezéseket tartalmazó, azonos fejlécű CSV-t. A már létező ID-k mindig kimaradnak az importból.</p><p><a href="https://kult2.hu/wp-admin/admin.php?page=gf_export" target="_blank" rel="noopener noreferrer">Gravity Forms export</a></p>${message ? `<p class="error">${escapeHtml(message)}</p>` : ""}<form method="post" enctype="multipart/form-data"><input type="hidden" name="mode" value="plan"><input type="file" name="file" accept=".csv,text/csv" required><br><button>Előnézet készítése</button></form></main>`;
 }
 
-function importResultPage(result, count) {
-  const created = result.results.filter((item) => item.type === "created").length;
-  const skipped = result.skipped?.length || 0;
-  return `<!doctype html><meta charset="utf-8"><title>Import kész</title><style>body{font:16px system-ui;max-width:680px;margin:48px auto;padding:0 20px}main{border:1px solid #ddd;border-radius:12px;padding:24px}</style><main><h1>Import elkészült</h1><p>${count} rekord feldolgozva.</p><ul><li>Új: ${created}</li><li>Kihagyva (már létező Gravity Forms ID): ${skipped}</li></ul><p>A Google Sheet frissítése befejeződött.</p></main>`;
+function importPlanPage(plan, count) {
+  const newIds = plan.new_entry_ids;
+  const oldIds = plan.skipped_existing_master;
+  const absentExisting = plan.existing_master_not_in_csv;
+  const recoveredIds = plan.recovered_from_email_history;
+  return `<!doctype html><meta charset="utf-8"><title>Import előnézet</title><style>body{font:16px system-ui;max-width:720px;margin:48px auto;padding:0 20px}main{border:1px solid #ddd;border-radius:12px;padding:24px}input,button{font:inherit;margin-top:12px}button{padding:10px 16px;cursor:pointer}code{word-break:break-all}.warn{color:#875b00}</style><main><h1>Import előnézet</h1><p>${count} CSV-sor ellenőrizve. Ez a terv még semmit nem írt a Sheetbe.</p><ul><li>Új, append-only rekord: ${newIds.length}</li><li>Kihagyott, már létező ID a CSV-ben: ${oldIds.length}</li><li>CSV-ből hiányzó, érintetlenül maradó korábbi ID-k: ${absentExisting.length}</li><li>E-mail-történetből helyreállítandó rekord: ${recoveredIds.length}</li><li>Első új sor: ${plan.append_start_row}</li></ul><details><summary>Új ID-k (${newIds.length})</summary><p>${escapeHtml(newIds.join(", ") || "nincs")}</p></details><details><summary>Kihagyott, már létező ID-k (${oldIds.length})</summary><p>${escapeHtml(oldIds.join(", ") || "nincs")}</p></details><details><summary>A CSV-ből hiányzó korábbi ID-k (${absentExisting.length})</summary><p>${escapeHtml(absentExisting.join(", ") || "nincs")}</p></details><details><summary>E-mail-történetből helyreállítandó ID-k (${recoveredIds.length})</summary><p>${escapeHtml(recoveredIds.join(", ") || "nincs")}</p></details><p><small>Terv hash: <code>${escapeHtml(plan.plan_hash)}</code></small></p><p class="warn">Az éles futtatás ugyanazt a CSV-t, változatlan Sheet-pillanatképet és egy frissen elkészített Drive-backupot követel meg.</p><form method="post" enctype="multipart/form-data"><input type="hidden" name="mode" value="execute"><input type="hidden" name="plan_hash" value="${escapeHtml(plan.plan_hash)}"><label>Friss Drive-backup azonosító<br><input name="backup_id" required></label><br><input type="file" name="file" accept=".csv,text/csv" required><br><button>Jóváhagyott terv végrehajtása</button></form></main>`;
+}
+
+function importResultPage(result, count, plan, backup, draftGrant) {
+  const written = result.results.length;
+  const draftAction = draftGrant
+    ? `<form method="post"><input type="hidden" name="mode" value="drafts"><input type="hidden" name="draft_grant" value="${escapeHtml(draftGrant)}"><button>Piszkozatok elkészítése az ${plan.new_entry_ids.length} új ID-hoz</button></form><p><small>A lépés csak piszkozatot hoz létre; jóváhagyást nem kapcsol be és Brevo-levelet nem küld.</small></p>`
+    : "<p>Nincs új ID, ezért nincs elkészítendő e-mail-piszkozat.</p>";
+  return `<!doctype html><meta charset="utf-8"><title>Import kész</title><style>body{font:16px system-ui;max-width:720px;margin:48px auto;padding:0 20px}main{border:1px solid #ddd;border-radius:12px;padding:24px}code{word-break:break-all}button{font:inherit;padding:10px 16px;cursor:pointer;margin-top:12px}</style><main><h1>Import elkészült</h1><p>${count} CSV-sor ellenőrizve.</p><ul><li>A főlap végére írt új rekordok: ${written}</li><li>Régi rekord megváltoztatva: 0</li><li>E-mail-piszkozat vagy Brevo-küldés: 0</li></ul><p>Minden korábbi rekord visszaolvasva, változatlanul maradt.</p>${draftAction}<p><small>Végrehajtott terv: <code>${escapeHtml(plan.plan_hash)}</code><br>Igazolt Drive-backup: <code>${escapeHtml(backup.id)}</code></small></p></main>`;
+}
+
+function importDraftResultPage(result) {
+  return `<!doctype html><meta charset="utf-8"><title>E-mail-piszkozatok elkészültek</title><style>body{font:16px system-ui;max-width:720px;margin:48px auto;padding:0 20px}main{border:1px solid #ddd;border-radius:12px;padding:24px}</style><main><h1>E-mail-piszkozatok elkészültek</h1><ul><li>Feldolgozott új ID: ${result.processed}</li><li>Ellenőrzésre kész piszkozat: ${result.ready}</li><li>Kézi elbírálást igényel: ${result.manual}</li><li>Brevo-küldés: 0</li><li>Automatikus jóváhagyás: 0</li></ul><p>A küldés továbbra is csak külön, kézi jóváhagyással indulhat.</p></main>`;
 }
 
 function escapeHtml(value) { return String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char])); }
@@ -2283,4 +2529,5 @@ export {
   CSV_HEADERS, brevoSendKey, brevoStatus, buildApprovedCorrections, emailRevisionHashFromRow, extractReferences,
   findMasterRow, mergeMasterRow, nameSuggestions, normalizeForMatch, parseCsv, parseCsvRegistrations,
   partitionManualImportRegistrations, paymentFromRow, recordBrevoEvent, registrationFromCsvRow,
+  appendOnlyMasterRegistrations, readImportSnapshot,
 };
