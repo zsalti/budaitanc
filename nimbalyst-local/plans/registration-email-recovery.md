@@ -29,10 +29,10 @@ flowchart LR
 ## 2026-08-27-i végrehajtási állapot
 
 - A production a hitelesített staging-forrásból sikeresen helyreállt. Az ellenőrzés 169 egyedi fő Sheet ID-t, 169 egyedi e-mail-kulcsot és nulla bekapcsolt jóváhagyást adott. A 19:23:56 utáni nyolc igazolt manuális/Brevo-küldési bizonyíték megmaradt; új levél nem ment ki. A részletek a [production visszaállítási jelentésben](../../reports/incident-restore-production-2026-08-27-success.json) vannak.
-- A kézi, kétlépcsős CSV-import élesben nyitva van. A már létező ID-k mindig kihagyott tételek; a CSV-ből hiányzó régi ID-k érintetlenek maradnak. Csak az új ID kerülhet a főlap végére.
-- Az import sikeroldalán 15 percig érvényes, konkrét új ID-khoz kötött piszkozatlépés jelenik meg. Piszkozat készülhet, de jóváhagyás és Brevo-küldés nem indulhat automatikusan.
-- A Gravity Forms webhook, befizetés-import és teljes munkatársi szinkron továbbra is letiltva marad. Az Apps Script forrása elkészült, de a bound projekt azonosítója hiányzik, ezért a friss menü még nincs productionbe telepítve.
-- Hátralévő éles kapu: egyetlen új rekord kontrollált importja, az abból készült piszkozat celláról cellára való ellenőrzése, majd külön emberi jóváhagyással egyetlen küldés és Brevo-visszaigazolás.
+- A jóváhagyott, append-only CSV-import sikeresen lefutott: 28 új rekord került a főlap végére, egyetlen régi rekord sem változott. Az ellenőrzött backup a megosztott felhasználói Drive-mappában van, és a service account visszaolvasása is sikeres. A személyes adat nélküli végrehajtási bizonyíték: [import-execution-2026-08-27.json](../../reports/import-execution-2026-08-27.json).
+- Az ugyanazzal a CSV-vel végzett utólagos előnézet nulla új rekordot és 76, már létező ID miatti kihagyást adott. Ez igazolja, hogy az ismételt import nem ír és a CSV-ből hiányzó régi ID-k érintetlenek maradnak.
+- A Gravity Forms webhook, befizetés-import és teljes munkatársi szinkron továbbra is letiltva marad. Zsolt kézzel bemásolta az új Apps Script-forrást a bound projektbe, és a token elfogadását jelezte; ezt a manager a következő, csak piszkozatot előállító lépés eredményével ellenőrzi. A friss menü kizárólag explicit ID-listára kérhet piszkozatot.
+- Hátralévő éles kapu: a 28 frissen importált ID-hoz piszkozatok készítése, a darabszám és a mintasorok ellenőrzése. Jóváhagyás és küldés nem automatikus; egyetlen tesztküldés is csak külön emberi döntés és Brevo-visszaigazolás után jöhet szóba.
 
 ## A visszaállítás alapja
 
