@@ -3,6 +3,24 @@
 **Állapot:** végrehajtás folyamatban — production visszaállítva 2026-08-27  
 **Dátum:** 2026-08-26
 
+## 2026-08-28-i operatív kiegészítés
+
+Ez a kiegészítés elsőbbséget élvez a terv korábbi, teljes munkatársi
+szinkronra vonatkozó ideiglenes tiltásával szemben. A felhasználói igény alapján
+a szinkron ismét használható, de csak a Worker által számolt, írásmentes
+előnézetből: a végrehajtás ugyanazt a tervhash-t, közvetlenül előtte készített
+Drive-backupot és újraolvasást követel. Törlés kizárólag külön emberi
+megerősítéssel engedélyezett. A Gravity Forms webhook és a befizetés-import
+változatlanul letiltva marad.
+
+Az importált ID-ket nem kell kézzel megadni: a CSV-import önállóan választja
+ki a fő Sheetből hiányzó, egyedi ID-kat, és csak ezekhez ad rövid életű,
+aláírt piszkozatjogosultságot. A bound Apps Script menü nem kér kézi
+ID-listát; a piszkozat a sikeres import eredményoldaláról indítható.
+
+Ez átmeneti operatív kapu, **nem** a D1-célarchitektúra jóváhagyása. A
+célarchitektúráról szóló döntési tétel nyitva marad.
+
 ## Döntés
 
 Először egy szűk, ellenőrizhető szolgáltatást állítunk vissza:
@@ -33,7 +51,7 @@ flowchart LR
 - Az ugyanazzal a CSV-vel végzett utólagos előnézet nulla új rekordot és 76, már létező ID miatti kihagyást adott. Ez igazolja, hogy az ismételt import nem ír és a CSV-ből hiányzó régi ID-k érintetlenek maradnak.
 - **Aktuális read-only állapot (2026-08-27 20:20 UTC):** 195 fő Sheet-sor, 195 e-mail-kimeneti sor és 88 eseménynapló-sor van; duplikált ID, küldési kulcs, küldési szándék vagy címzettazonossági hiba nincs. Az események típusa: 44 `delivered`, 43 `request`, 1 `soft_bounce`. A legújabb `request` esemény szolgáltatói ideje 14:19:48 UTC, de csak 20:17:25 UTC-kor érkezett meg webhookként: ez késő Brevo-visszajelzés, nem a manager által indított új küldés. A korábbi 169/0 adat a visszaállítási alapállapotot írja le, nem a jelenlegi élő állapotot. Jelenleg 8 aktív e-mail-jóváhagyás van az `E-mail kimenet` 183–189. és 192. sorában (ID-k: 1964–1958, 1955). A manager ezeket nem írja át és nem indít küldést; a következő nem-küldő ellenőrzés csak a jelölők kézi kikapcsolása után indulhat.
 - **Utóellenőrzés (2026-08-27 23:41 CEST):** a csak olvasó audit 195 fő Sheet-sort, 195 e-mail-kimeneti sort és 89 eseménynapló-sor talált. Továbbra sincs duplikált ID, küldési kulcs vagy küldési szándék, illetve címzettazonossági hiba. Az események bontása: 44 `delivered`, 44 `request`, 1 `soft_bounce`; a többlet egy késve beérkezett szolgáltatói visszajelzés, nem új manager-küldés. A Worker védőkorlátai a `28a644a5-5a44-480e-bd3b-b8f0ac09c419` production verzióban futnak; `/healthz` 200, a befizetés- és teljes szinkron-végpont `410 disabled` választ ad. A PII-mentes bizonyíték: [course-validation audit](../../reports/incident-audit-2026-08-27-course-validation.json).
-- A Gravity Forms webhook, befizetés-import és teljes munkatársi szinkron továbbra is letiltva marad. Zsolt kézzel bemásolta az új Apps Script-forrást a bound projektbe, és a token elfogadását jelezte; ezt a manager a következő, csak piszkozatot előállító lépés eredményével ellenőrzi. A friss menü kizárólag explicit ID-listára kérhet piszkozatot.
+- **Történeti állapot 2026-08-27:** a Gravity Forms webhook, befizetés-import és teljes munkatársi szinkron akkor még letiltva maradt. Zsolt kézzel bemásolta az akkori Apps Script-forrást a bound projektbe, és a token elfogadását jelezte. A 2026-08-28-i operatív kiegészítés új forrásverziót és védett sync előnézetet vezet be; ezt a bound projektbe külön ki kell adni.
 - Hátralévő éles kapu: a 28 frissen importált ID-hoz piszkozatok készítése, a darabszám és a mintasorok ellenőrzése. Jóváhagyás és küldés nem automatikus; egyetlen tesztküldés is csak külön emberi döntés és Brevo-visszaigazolás után jöhet szóba.
 
 ## A visszaállítás alapja

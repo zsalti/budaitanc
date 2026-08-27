@@ -21,6 +21,7 @@ accounttal közvetlenül hívja, nincs szükség Google Cloud Runra.
    npx wrangler secret put GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT
    npx wrangler secret put IMPORT_ADMIN_TOKEN
    npx wrangler secret put EMAIL_ADMIN_TOKEN
+   npx wrangler secret put SYNC_ADMIN_TOKEN
    npx wrangler secret put BREVO_API_KEY
    npx wrangler secret put BREVO_SENDER_EMAIL
    npx wrangler secret put BREVO_SENDER_NAME
@@ -120,9 +121,10 @@ ellenőrzött újraindításkor lehet `off`. Nyitott állapotban is minden műve
 előtt ellenőrzi a Worker az ID-k egyediségét, a fejlécet és azt, hogy nincs
 részleges alapszűrő (például `B:AI`) a főlapon.
 
-Az e-mail-piszkozatokhoz az Apps Script a frissen importált Gravity Forms
-ID-k külön listáját kéri. Import és piszkozatfrissítés sosem kapcsol be
-jóváhagyást és sosem küld Brevo-levelet.
+Az import eredményoldala a tervből automatikusan kiválasztott, friss ID-kra
+15 perces, aláírt piszkozatjogosultságot ad. Nem kell és nem is lehet kézzel
+ID-listát megadni. A piszkozatkészítés nem kapcsol be jóváhagyást és nem küld
+Brevo-levelet.
 
 Az importterv ellenőrzése után, de az éles végrehajtás előtt készíts friss
 Drive-másolatot. A parancs kiírja a backup ID-t; ezt kell az importoldal
@@ -171,26 +173,33 @@ python3 scripts/restore_from_verified_staging.py \
 
 ## Munkatársi Sheet szinkron
 
-**Jelenleg letiltva.** A `/sync/` végpont minden tokennel `410 disabled`
-választ ad, és az Apps Script menüből is eltűnt. Az alábbi szöveg csak a
-korábbi működés leírása; ne indítsd el a helyreállítás részeként.
+**Védett, kétlépcsős működés.** A `/sync/<SYNC_ADMIN_TOKEN>` csak `POST`
+kérést fogad. A `mode: "preview"` kizárólag olvas: megszámolja az új,
+frissítendő, változatlan és a fő Sheetből hiányzó munkatársi sorokat, valamint
+az esetleg létrehozandó három oszlopot. Sem preview, sem hibás token nem ír.
 
-A pipeline `staff_target` beállítása esetén a Worker minden új webhook- és
-CSV-rekordot a fő Sheet mellett a munkatársi Sheetbe is beír. A teljes
-szinkron az `A:H` mezőkön felül az `I. féléves tandíjfizetés dátuma`, a
+Az `mode: "execute"` csak akkor ír, ha az előnézet tervhash-e változatlan,
+megadnak egy friss, a munkatársi Sheetről készített Drive-másolat azonosítót,
+és az előnézet utáni újraolvasás is ugyanazt a tervet adja. Ha törlendő sor
+lenne, az `allow_deletes: true` külön, emberi megerősítése is kötelező. Az
+írás után a Worker visszaolvassa és ellenőrzi az összes szinkronizált sort.
+Egy nem üres, de ID nélküli vagy duplikált ID-jú munkatársi sor azonnal
+megállítja a folyamatot.
+
+A pipeline `staff_target` beállítása esetén a teljes szinkron az `A:H`
+mezőkön felül az `I. féléves tandíjfizetés dátuma`, a
 `II. féléves tandíj befizetés dátuma` és az `Egyéb megjegyzés` mezőt is átviszi.
 Ha ezek még hiányoznak a munkatársi lap fejlécéből, létrehozza őket; a többi kézi, pénzügyi és
 megjegyzés-oszlop érintetlen marad.
 
-A fő Sheethez kötött Apps Script a `Budai Tánc → Munkatársi Sheet
-szinkronizálása` menüponttal indít teljes egyeztetést. A kód az
+A fő Sheethez kötött Apps Scriptben a `Budai Tánc → Munkatársi Sheet-szinkron
+előnézete` indít írásmentes ellenőrzést; a külön `… végrehajtása` menüpont
+előbb megmutatja az eredményt, majd a backup-ID-t és – szükség esetén – a
+törlést is emberrel hagyatja jóvá. A kód az
 `../apps-script/master-sheet-sync.gs` fájlban van. A token egyszeri megadása
-a Script Properties-ben történik. A szinkron fizikailag törli a munkatársi
-Sheetből azokat az azonosítóval ellátott sorokat, amelyek már nincsenek a fő
-Sheetben. Minden futáskor `Közlemény` azonosító alapján frissíti a már létező
-sorok mindkét fizetési dátumát és az `Egyéb megjegyzés` értékét is, ezért a
-jelentkezés után később rögzített befizetések is átkerülnek, új sor létrehozása
-nélkül.
+a Script Properties-ben történik. A bound Apps Scriptbe a kiadott forrást még
+külön be kell másolni/publikálni; a Worker deploy önmagában nem módosít Google
+Apps Script projektet.
 
 ## Befizetések érkeztetése
 
@@ -391,9 +400,10 @@ npm run test:smoke
 
 A `test-fixtures/dami-registration.csv` egy teljes, személyes adatot nem
 tartalmazó dummy export. A smoke teszt a tervhez kötött append-only importot,
-a karbantartási zárat, a letiltott pénzügyi és munkatársi végpontot, valamint
-az e-mail-piszkozat elkülönítését ellenőrzi. Az integritási teszt külön fedi a
-duplikált/hiányzó ID-kat, a régi rekord módosításának elutasítását és a
+a karbantartási zárat, a csak olvasó munkatársi preview-t, az előnézethez
+kötött és backup-védett végrehajtást, a külön törlési jóváhagyást, valamint az
+e-mail-piszkozat elkülönítését ellenőrzi. Az integritási teszt külön fedi a
+duplikált/hiányzó ID-ket, a régi rekord módosításának elutasítását és a
 részleges alapszűrőt.
 
 ### Incidens forrásaudit (csak olvasás)

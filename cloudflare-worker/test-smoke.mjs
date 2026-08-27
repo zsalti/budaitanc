@@ -20,6 +20,7 @@ const env = {
   GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT: JSON.stringify(serviceAccount),
   PIPELINES_CONFIG_JSON: JSON.stringify({ pipelines: [pipeline] }),
   EMAIL_ADMIN_TOKEN: "test-email-token",
+  SYNC_ADMIN_TOKEN: "test-sync-token",
   BREVO_API_KEY: "test-brevo-key",
   BREVO_SENDER_EMAIL: "sender@example.invalid",
   BREVO_WEBHOOK_SECRET: "test-brevo-webhook-secret",
@@ -27,9 +28,10 @@ const env = {
 };
 
 const masterHeader = [
-  "Közlemény", "Tanfolyam neve", "Nap és terem", "Óra ideje", "Táncpedagógusok", "Jelentkező (növendék) neve", "Jelentkezés ideje", "Tanfolyamon részvétel kezdete / naptár", "Próbaórára jelentkezés", "I. féléves tandíj", "I. féléves tandíjfizetés dátuma", "I. tagsági kiállítva", "Egyéb megjegyzés", "Más óraszámban jár", "Születési dátum", "Lakcím", "Telefon", "E-mail cím", "Törvényes képviselő, szülő neve", "Kerület Kártya száma", "Kerület Kártya lejárati dátuma", "Kerület Kártya fotója", "Testvér neve", "Testvér csoportja", "Rendelkezik jóváírható összeggel", "Számlázási adatok", "Számlázási email",
+  "Közlemény", "Tanfolyam neve", "Nap és terem", "Óra ideje", "Táncpedagógusok", "Jelentkező (növendék) neve", "Jelentkezés ideje", "Tanfolyamon részvétel kezdete / naptár", "Próbaórára jelentkezés", "I. féléves tandíj", "I. féléves tandíjfizetés dátuma", "I. tagsági kiállítva", "Egyéb megjegyzés", "Más óraszámban jár", "Születési dátum", "Lakcím", "Telefon", "E-mail cím", "Törvényes képviselő, szülő neve", "Kerület Kártya száma", "Kerület Kártya lejárati dátuma", "Kerület Kártya fotója", "Testvér neve", "Testvér csoportja", "Rendelkezik jóváírható összeggel", "Számlázási adatok", "Számlázási email", "II. féléves tandíj befizetés dátuma",
 ];
 const masterState = [masterHeader];
+const staffState = [[...masterHeader.slice(0, 8)]];
 const emailState = [[...EMAIL_OUTPUT_HEADERS]];
 const configState = [[
   "Tanfolyam kulcs", "GF pontos érték / alias", "Nap", "Kezdés", "Befejezés", "Helyszín", "Tanár", "Heti alkalom", "Perc/alkalom", "Díjkategória", "Kézi elbírálás",
@@ -65,11 +67,24 @@ globalThis.fetch = async (input, options = {}) => {
       { properties: { sheetId: 5, title: "E-mail eseménynapló", gridProperties: { rowCount: 1000, columnCount: 9 } } },
     ] }), { status: 200 });
   }
+  if (url.includes("test-staff-spreadsheet?fields=")) {
+    return new Response(JSON.stringify({ sheets: [
+      { properties: { sheetId: 7, title: pipeline.staff_target.tab_name, gridProperties: { rowCount: 1000, columnCount: 26 } } },
+    ] }), { status: 200 });
+  }
   if (url.includes("/values:batchUpdate")) {
     for (const item of JSON.parse(options.body).data) applyRange(item.range, item.values[0]);
     return new Response(JSON.stringify({}), { status: 200 });
   }
   if (url.includes("test-spreadsheet:batchUpdate")) return new Response(JSON.stringify({ replies: [] }), { status: 200 });
+  if (url.includes("test-staff-spreadsheet:batchUpdate")) {
+    const requests = JSON.parse(options.body).requests || [];
+    for (const request of requests) {
+      const range = request.deleteDimension?.range;
+      if (range?.dimension === "ROWS") staffState.splice(range.startIndex, range.endIndex - range.startIndex);
+    }
+    return new Response(JSON.stringify({ replies: [] }), { status: 200 });
+  }
   if (url.includes("/values/")) return new Response(JSON.stringify({ values: stateForRead(decoded) }), { status: 200 });
   throw new Error(`Unhandled fetch: ${url}`);
 };
@@ -80,8 +95,8 @@ try {
   const payment = await worker.fetch(new Request("https://example.test/payments/correct-token", { method: "POST" }), { ...env, PAYMENT_IMPORT_TOKEN: "correct-token" });
   assert.equal(payment.status, 410);
   assert.equal((await payment.json()).error, "disabled");
-  const sync = await worker.fetch(new Request("https://example.test/sync/correct-token", { method: "POST" }), { ...env, SYNC_ADMIN_TOKEN: "correct-token" });
-  assert.equal(sync.status, 410);
+  const sync = await worker.fetch(new Request("https://example.test/sync/wrong-token", { method: "POST" }), env);
+  assert.equal(sync.status, 404);
   const webhook = await worker.fetch(new Request("https://example.test/webhooks/gravity-forms", {
     method: "POST", headers: { "Content-Type": "application/json", "X-BudaiTanc-Secret": env.WEBHOOK_SHARED_SECRET }, body: JSON.stringify({}),
   }), env);
@@ -112,6 +127,50 @@ try {
   assert.equal(masterState.length, 2);
   assert.equal(masterState[1][0], "TEST-CODEX-20260723-001");
   assert.equal(masterState[1][5], "Codex Teszt Dami");
+
+  const syncPreview = await syncRequest({ mode: "preview" });
+  assert.equal(syncPreview.status, 200);
+  const syncPreviewResult = await syncPreview.json();
+  assert.equal(syncPreviewResult.status, "preview");
+  assert.equal(syncPreviewResult.created, 1, "az előnézet felismeri a még hiányzó munkatársi sort");
+  assert.equal(syncPreviewResult.updated, 0);
+  assert.equal(syncPreviewResult.deleted, 0);
+  assert.equal(syncPreviewResult.added_columns.length, 3, "a hiányzó, kézi pénzügyi oszlopokat csak tervezi");
+  assert.equal(staffState.length, 1, "az előnézet nem ír a munkatársi Sheetbe");
+
+  const syncLocked = await syncRequest({ mode: "execute", plan_hash: syncPreviewResult.plan_hash }, { ...env, RECOVERY_MAINTENANCE_MODE: "on" });
+  assert.equal(syncLocked.status, 503, "a karbantartási zár az execute módot megállítja");
+  assert.equal(staffState.length, 1);
+
+  const syncExecuted = await syncRequest({
+    mode: "execute", plan_hash: syncPreviewResult.plan_hash, backup_id: "test-backup",
+  });
+  assert.equal(syncExecuted.status, 200);
+  const syncExecutedResult = await syncExecuted.json();
+  assert.equal(syncExecutedResult.created, 1);
+  assert.equal(staffState[1][0], "TEST-CODEX-20260723-001");
+  assert.equal(staffState[1][5], "Codex Teszt Dami");
+  assert.deepEqual(staffState[0].slice(8, 11), [
+    "I. féléves tandíjfizetés dátuma", "II. féléves tandíj befizetés dátuma", "Egyéb megjegyzés",
+  ], "a végrehajtás csak jóváhagyott tervből hozza létre a szinkronoszlopokat");
+
+  staffState.push(["TEST-CODEX-STALE-001", "Régi", "sor"]);
+  const staleSyncPreview = await syncRequest({ mode: "preview" });
+  assert.equal(staleSyncPreview.status, 200);
+  const staleSyncPreviewResult = await staleSyncPreview.json();
+  assert.equal(staleSyncPreviewResult.deleted, 1, "a preview kimutatja a törlendő, fő Sheetből hiányzó sort");
+  assert.equal(staffState.length, 3, "a preview törlésmentes");
+  const deleteWithoutConfirmation = await syncRequest({
+    mode: "execute", plan_hash: staleSyncPreviewResult.plan_hash, backup_id: "test-backup",
+  });
+  assert.equal(deleteWithoutConfirmation.status, 409, "törlés külön megerősítés nélkül nem indulhat");
+  assert.equal(staffState.length, 3);
+  const confirmedDelete = await syncRequest({
+    mode: "execute", plan_hash: staleSyncPreviewResult.plan_hash, backup_id: "test-backup", allow_deletes: true,
+  });
+  assert.equal(confirmedDelete.status, 200);
+  assert.equal(staffState.length, 2, "a jóváhagyott törlés a friss tervből, visszaolvasással zárul");
+  assert.equal(staffState.some((row) => row[0] === "TEST-CODEX-STALE-001"), false);
 
   const importedDrafts = await importDraftRequest(draftGrant);
   assert.equal(importedDrafts.status, 200);
@@ -203,7 +262,14 @@ async function importDraftRequest(draftGrant) {
   return worker.fetch(new Request("https://example.test/import/test-import-token", { method: "POST", body: form }), env);
 }
 
+async function syncRequest(payload, selectedEnv = env) {
+  return worker.fetch(new Request("https://example.test/sync/test-sync-token", {
+    method: "POST", body: JSON.stringify({ pipeline_id: pipeline.pipeline_id, ...payload }),
+  }), selectedEnv);
+}
+
 function stateForRead(url) {
+  if (url.includes("test-staff-spreadsheet")) return staffState;
   if (url.includes("Tanfolyamok")) return configState;
   if (url.includes("E-mail kimenet")) return emailState;
   if (url.includes("E-mail beállítások")) return settingsState;
@@ -214,7 +280,7 @@ function stateForRead(url) {
 function applyRange(range, values) {
   const match = String(range).match(/!([A-Z]+)(\d+)(?::([A-Z]+)\d+)?$/);
   assert.ok(match, `Unexpected range: ${range}`);
-  const state = range.includes("E-mail kimenet") ? emailState : masterState;
+  const state = range.includes("E-mail kimenet") ? emailState : (range.includes(pipeline.staff_target.tab_name) ? staffState : masterState);
   const startColumn = columnNumber(match[1]);
   const rowIndex = Number(match[2]) - 1;
   while (state.length <= rowIndex) state.push([]);

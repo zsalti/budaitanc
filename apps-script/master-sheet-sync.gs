@@ -2,20 +2,25 @@ const BUDAI_TANC_SYNC = Object.freeze({
   endpoint: 'https://budaitancklub-registration-webhook.zsolt-3bf.workers.dev',
   pipelineId: 'tanctanfolyam_jelentkezes',
   emailTokenProperty: 'EMAIL_ADMIN_TOKEN',
+  syncTokenProperty: 'SYNC_ADMIN_TOKEN',
 });
 
 function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('Budai Tánc')
     .addItem('E-mail lapok inicializálása', 'setupEmailInfrastructure')
-    .addItem('E-mail-piszkozatok készítése importált ID-khoz', 'refreshEmailDrafts')
+    .addItem('E-mail-piszkozatok az import után', 'showImportDraftGuidance')
     .addItem('Hibás közlemények összevezetése', 'reconcileEmailReferences')
     .addItem('Jóváhagyott e-mailek küldése', 'sendApprovedEmails')
+    .addSeparator()
+    .addItem('Munkatársi Sheet-szinkron előnézete', 'previewStaffSheetSync')
+    .addItem('Munkatársi Sheet-szinkron végrehajtása', 'syncStaffSheet')
     .addSeparator()
     .addItem('Forrásoszlopok védelmének frissítése', 'protectRegistrationSourceColumns')
     .addItem('Részleges alapszűrő eltávolítása', 'removePartialMasterFilter')
     .addSeparator()
     .addItem('E-mail token beállítása', 'configureEmailToken')
+    .addItem('Munkatársi Sheet token beállítása', 'configureSyncToken')
     .addToUi();
 }
 
@@ -42,33 +47,63 @@ function configureToken_(propertyName, title, prompt) {
 }
 
 function configureSyncToken() {
-  SpreadsheetApp.getUi().alert('A teljes munkatársi Sheet-szinkron a helyreállítás alatt ki van kapcsolva.');
+  configureToken_(
+    BUDAI_TANC_SYNC.syncTokenProperty,
+    'Munkatársi Sheet token',
+    'Illeszd be a munkatársi Sheet-szinkron admin tokenjét. A Google Script Properties-ben tároljuk, nem a Sheetben.',
+  );
+}
+
+function showImportDraftGuidance() {
+  SpreadsheetApp.getUi().alert(
+    'Az új e-mail-piszkozatokat az import eredményoldalán indítsd el. A rendszer ott automatikusan a frissen importált ID-khoz kötött, rövid életű jogosultságot használ; ez a menü nem kér és nem fogad kézi ID-listát.',
+  );
+}
+
+function previewStaffSheetSync() {
+  const result = callSyncEndpoint_({ mode: 'preview' });
+  showStaffSyncResult_('Munkatársi Sheet-szinkron előnézet', result);
 }
 
 function syncStaffSheet() {
-  SpreadsheetApp.getUi().alert('A teljes munkatársi Sheet-szinkron a helyreállítás alatt ki van kapcsolva.');
+  const ui = SpreadsheetApp.getUi();
+  const preview = callSyncEndpoint_({ mode: 'preview' });
+  const confirmation = ui.alert(
+    'Munkatársi Sheet-szinkron végrehajtása',
+    staffSyncSummary_(preview) + '\n\nA Worker azonos tervhash-t, friss Drive-backupot és visszaolvasást követel. Folytatod?',
+    ui.ButtonSet.YES_NO,
+  );
+  if (confirmation !== ui.Button.YES) return;
+
+  if (Number(preview.deleted || 0) > 0) {
+    const deleteConfirmation = ui.alert(
+      'Törlési megerősítés szükséges',
+      `${preview.deleted} munkatársi sor nincs már a fő Sheetben, ezért a szinkron törölné. Ez visszafordítható a backupból, de csak tudatos jóváhagyással futtatható. Folytatod?`,
+      ui.ButtonSet.YES_NO,
+    );
+    if (deleteConfirmation !== ui.Button.YES) return;
+  }
+
+  const backupPrompt = ui.prompt(
+    'Friss Drive-backup azonosító',
+    'Add meg a közvetlenül a munkatársi Sheet-ről készített, elérhető Google Sheets Drive-másolat azonosítóját.',
+    ui.ButtonSet.OK_CANCEL,
+  );
+  if (backupPrompt.getSelectedButton() !== ui.Button.OK) return;
+  const backupId = backupPrompt.getResponseText().trim();
+  if (!backupId) return ui.alert('A végrehajtáshoz kötelező a friss Drive-backup azonosítója.');
+
+  const result = callSyncEndpoint_({
+    mode: 'execute',
+    plan_hash: preview.plan_hash,
+    backup_id: backupId,
+    allow_deletes: Number(preview.deleted || 0) > 0,
+  });
+  showStaffSyncResult_('Munkatársi Sheet-szinkron elkészült', result);
 }
 
 function importPayments() {
   SpreadsheetApp.getUi().alert('A befizetés-import a helyreállítás alatt ki van kapcsolva.');
-}
-
-function refreshEmailDrafts() {
-  const ui = SpreadsheetApp.getUi();
-  const response = ui.prompt(
-    'Importált Gravity Forms ID-k',
-    'Csak az imént sikeresen importált ID-k vesszővel elválasztott listáját add meg. Régi állományból nem készül új piszkozat.',
-    ui.ButtonSet.OK_CANCEL,
-  );
-  if (response.getSelectedButton() !== ui.Button.OK) return;
-  const entryIds = response.getResponseText().split(',').map((value) => value.trim()).filter(Boolean);
-  if (!entryIds.length || new Set(entryIds).size !== entryIds.length) {
-    return ui.alert('Adj meg legalább egy egyedi Gravity Forms ID-t.');
-  }
-  const result = callEmailEndpoint_('drafts', { entry_ids: entryIds });
-  SpreadsheetApp.getUi().alert(
-    `Piszkozatok frissítve. Feldolgozott: ${result.processed}, küldhető: ${result.ready}, kézi: ${result.manual}.`,
-  );
 }
 
 function reconcileEmailReferences() {
@@ -121,6 +156,37 @@ function callEmailEndpoint_(action, payload = {}) {
   const body = response.getContentText();
   if (status < 200 || status >= 300) throw new Error(`Az e-mail művelet nem sikerült (HTTP ${status}): ${body}`);
   return JSON.parse(body);
+}
+
+function callSyncEndpoint_(payload) {
+  const ui = SpreadsheetApp.getUi();
+  const token = PropertiesService.getScriptProperties().getProperty(BUDAI_TANC_SYNC.syncTokenProperty);
+  if (!token) {
+    ui.alert('Előbb válaszd a Budai Tánc → Munkatársi Sheet token beállítása menüpontot.');
+    throw new Error('Hiányzik a SYNC_ADMIN_TOKEN Script Property.');
+  }
+  const response = UrlFetchApp.fetch(
+    `${BUDAI_TANC_SYNC.endpoint}/sync/${encodeURIComponent(token)}`,
+    {
+      method: 'post', contentType: 'application/json',
+      payload: JSON.stringify({ pipeline_id: BUDAI_TANC_SYNC.pipelineId, ...payload }),
+      muteHttpExceptions: true,
+    },
+  );
+  const status = response.getResponseCode();
+  const body = response.getContentText();
+  if (status < 200 || status >= 300) throw new Error(`A munkatársi Sheet-szinkron nem sikerült (HTTP ${status}): ${body}`);
+  return JSON.parse(body);
+}
+
+function staffSyncSummary_(result) {
+  const extraColumns = (result.added_columns || []).join(', ') || 'nincs';
+  return `Új: ${result.created || 0}; frissül: ${result.updated || 0}; változatlan: ${result.unchanged || 0}; ` +
+    `törlendő: ${result.deleted || 0}; összes fő Sheet-rekord: ${result.total || 0}; új oszlopok: ${extraColumns}.`;
+}
+
+function showStaffSyncResult_(title, result) {
+  SpreadsheetApp.getUi().alert(`${staffSyncSummary_(result)}\nTervhash: ${result.plan_hash || 'n/a'}`);
 }
 
 function protectRegistrationSourceColumns() {

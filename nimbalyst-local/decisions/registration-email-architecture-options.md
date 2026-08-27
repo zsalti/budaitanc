@@ -9,6 +9,11 @@ A következő fejlesztési ciklusban a **Cloudflare Worker + D1 kanonikus adatmi
 
 Ez ad elég erős egyediség-, idempotencia- és auditgaranciát anélkül, hogy most egy teljesen új, nehézkes ügyviteli rendszert építenénk. A jelenlegi, biztonságos CSV-import/e-mail útvonal marad üzemben az átállás alatt. A banki folyamat és a teljes munkatársi szinkron csak az új írási kapuk után térhet vissza.
 
+**2026-08-28-i pontosítás:** a jelenlegi Workerben megjelent védett,
+előnézethez, backuphoz és külön törlésjóváhagyáshoz kötött munkatársi
+Sheet-szinkron átmeneti operatív folyamat. Nem D1-projekció, nem kanonikus
+adattárolási döntés, és nem zárja le ezt a döntési javaslatot.
+
 Nem javasolt sem a jelenlegi Sheetet tovább terhelni üzleti adatbázisként, sem egyetlen nagy átállással lecserélni minden kezelői folyamatot. Mindkettő feleslegesen jó eséllyel visszahozná azt a fajta „látszólag rendben, közben átcsúszott három sor” problémát, amelyből most épp kifelé megyünk.
 
 ## Kiindulópont és döntési szempontok

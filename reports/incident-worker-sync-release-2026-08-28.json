@@ -1,0 +1,37 @@
+{
+  "generated_at": "2026-08-28T00:47:42+02:00",
+  "mode": "production_worker_release_evidence",
+  "worker": {
+    "url": "https://budaitancklub-registration-webhook.zsolt-3bf.workers.dev",
+    "version_id": "55fe4676-7eb6-4f9c-9a2c-9ca59a0267d3",
+    "healthz": {
+      "status": 200,
+      "body": {
+        "status": "ok"
+      }
+    },
+    "sync_invalid_token": {
+      "request": "POST /sync/not-a-valid-token with mode=preview",
+      "status": 404,
+      "body_error": "not_found",
+      "meaning": "The old 410 disabled route is no longer deployed; token validation remains opaque."
+    }
+  },
+  "configured_secret_names_verified": [
+    "GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT",
+    "SYNC_ADMIN_TOKEN"
+  ],
+  "staff_sync": {
+    "preview_or_execute_run": false,
+    "reason": "Cloudflare does not reveal SYNC_ADMIN_TOKEN and no bound Apps Script project or clasp/browser session is available. No Google Sheet was written."
+  },
+  "import_reconciliation": {
+    "audit_report": "reports/incident-audit-2026-08-28-import-sync-preflight.json",
+    "source_records": 76,
+    "source_only_count": 2,
+    "source_only_entry_ids": ["1936", "1951"],
+    "existing_id_field_mismatch_count": 2,
+    "meaning": "A fresh plan and Drive backup are still required before the append-only import can write the two automatically selected IDs."
+  },
+  "email_send_started": false
+}
