@@ -1696,13 +1696,13 @@ async function refreshEmailDrafts(accessToken, pipeline, entryIds = null) {
 
     const periodKey = emailPeriodKey(registration, calculation);
     const sendKey = `${entryId}|${eventType}|${periodKey}|${TEMPLATE_VERSION}`;
-    if (hasPriorEmailSendEvidence(mutableEmailRows, entryId, registration.email)) {
+    if (hasPriorEmailSendEvidence(mutableEmailRows, entryId)) {
       results.push({
         entry_id: entryId,
         row_index: mainRow,
         event_type: eventType,
         status: AUTOMATION_STATUS.MANUAL,
-        reason: "Korábbi Brevo- vagy kézi küldési bizonyíték létezik; második levél nem készül.",
+        reason: "Korábbi Brevo- vagy kézi küldési bizonyíték létezik ehhez az ID-hoz; második levél nem készül.",
         fee: calculation.fee || "",
         first_class: firstClassValue,
       });
@@ -2031,11 +2031,10 @@ function findExistingEmailRow(rows, sendKey, entryId, eventType, periodKey, reci
   };
 }
 
-function hasPriorEmailSendEvidence(rows, entryId, recipient) {
+function hasPriorEmailSendEvidence(rows, entryId) {
   return rows.some((emailRow, emailIndex) => (
     emailIndex > 0
     && text(emailRow[EMAIL_COLUMN.ENTRY_ID]) === entryId
-    && sameRecipient(emailRow[EMAIL_COLUMN.TO], recipient)
     && (
       isChecked(emailRow[EMAIL_COLUMN.MANUAL_SENT])
       || Boolean(text(emailRow[EMAIL_COLUMN.MESSAGE_ID]))

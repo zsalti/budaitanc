@@ -137,6 +137,7 @@ function classifyOne(source, config, settings, settingsConfigured) {
     reason: reasons.join(" "),
     course_key: calculation.courseKey || "",
     semester: calculation.semester || "",
+    fee_category: calculation.feeCategory || "",
     fee: calculation.fee || "",
     first_class: calculation.firstClass
       ? `${formatDate(calculation.firstClass.date)} ${calculation.firstClass.startTime}`.trim()

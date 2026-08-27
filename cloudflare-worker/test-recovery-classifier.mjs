@@ -34,6 +34,7 @@ assert.equal(first.send_ready, 1);
 assert.equal(first.manual_review, 1);
 assert.equal(first.records[0].entry_id, "1001");
 assert.equal(first.records[0].classification, "send_ready");
+assert.equal(first.records[0].fee_category, "1x60");
 assert.match(first.records[1].reason, /hiányzik a szülő/i);
 
 const serialized = JSON.stringify(first);

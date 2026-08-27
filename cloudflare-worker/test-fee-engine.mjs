@@ -140,6 +140,23 @@ assert.equal(staleFrequencyResult.status, AUTOMATION_STATUS.READY);
 assert.equal(staleFrequencyResult.feeCategory, "1x45");
 assert.equal(staleFrequencyResult.fee, 39000);
 
+// The live 2026 Tanfolyamok sheet still has an old `Heti alkalom = 2` value
+// beside this one explicitly selected Wednesday slot. Keep the exact form
+// value in the regression suite: a stale frequency must never double-charge a
+// registrant who selected only the Wednesday class.
+const liveWednesdayArtisticGymnasticsConfig = parseAutomationConfig([
+  ["MŰVÉSZI TORNA ÓVODÁS 5-6 ÉVESEK", "MŰVÉSZI TORNA ÓVODÁS 5-6 ÉVESEK/SZERDA HAJÓS TEREM/17.30-18.15/SZIRÁNYI LAURA", "SZERDA", "17:30", "18:15", "Hajós terem", "Szirányi Laura", 2, 45, "2x45", false],
+  ["", "", "", "", "", "", "", "", "", "", "", "", 1, "2026-09-03", "2026-09-30", "1x45", 39000, 37050],
+]);
+const liveWednesdayArtisticGymnasticsResult = calculateRegistration({
+  ...base,
+  courseRaw: "MŰVÉSZI TORNA ÓVODÁS 5-6 ÉVESEK/SZERDA HAJÓS TEREM/17.30-18.15/SZIRÁNYI LAURA",
+  submittedAt: "2026-09-15",
+}, liveWednesdayArtisticGymnasticsConfig);
+assert.equal(liveWednesdayArtisticGymnasticsResult.status, AUTOMATION_STATUS.READY);
+assert.equal(liveWednesdayArtisticGymnasticsResult.feeCategory, "1x45");
+assert.equal(liveWednesdayArtisticGymnasticsResult.fee, 39000);
+
 const alternateAttendance = calculateRegistration({
   ...base,
   alternateAttendance: "heti 1",

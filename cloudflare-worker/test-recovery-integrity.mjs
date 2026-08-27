@@ -4,6 +4,7 @@ import {
   appendStartRow,
   assertNoPartialBasicFilter,
   buildAppendOnlyImportPlan,
+  validateEmailRows,
   validateMasterRows,
 } from "./src/recovery-integrity.js";
 
@@ -71,6 +72,16 @@ const freshOnlyPlan = await buildAppendOnlyImportPlan({
 assert.deepEqual(freshOnlyPlan.new_entry_ids, ["1002"]);
 assert.deepEqual(freshOnlyPlan.existing_master_not_in_csv, ["1001"]);
 assert.equal(freshOnlyPlan.csv_scope, "new_records_only", "a friss ID-kra szűkített CSV append-only importálható");
+
+const historyOnly = registration("1003", "Történetből Helyreállított", "mar-kikuldve@example.invalid");
+const recoveryPlan = await buildAppendOnlyImportPlan({
+  csvText: "missing master record with retained email history",
+  registrations: [existing, historyOnly],
+  masterRows,
+  emailRows,
+});
+assert.deepEqual(recoveryPlan.new_entry_ids, ["1003"], "a főlapról hiányzó ID append-only helyreállítható");
+assert.deepEqual(recoveryPlan.recovered_from_email_history, ["1003"], "a terv külön jelzi a megőrzött e-mail-történetet");
 
 // Anonymized, full-size incident fixture: 169 source records, 154 already
 // present master rows, and 15 append-only candidates. The test is deliberately
@@ -149,8 +160,30 @@ assert.throws(
   () => assertNoPartialBasicFilter({ sheets: [{ properties: { title: "Főlap" }, basicFilter: { range: { startRowIndex: 0, startColumnIndex: 1, endColumnIndex: 35 } } }] }, "Főlap", 27),
   /részleges/i,
 );
+assert.throws(
+  () => assertNoPartialBasicFilter({ sheets: [{
+    properties: { title: "Főlap", gridProperties: { rowCount: 1000 } },
+    basicFilter: { range: { startRowIndex: 0, startColumnIndex: 0, endColumnIndex: 27, endRowIndex: 156 } },
+  }] }, "Főlap", 27),
+  /részleges/i,
+);
+assert.throws(
+  () => assertNoPartialBasicFilter({ sheets: [{
+    properties: { title: "Főlap", gridProperties: { rowCount: 1000 } },
+    basicFilter: { range: { startRowIndex: 0, startColumnIndex: 0, endColumnIndex: 27 }, sortSpecs: [{ dimensionIndex: 5, sortOrder: "ASCENDING" }] },
+  }] }, "Főlap", 27),
+  /rendezést/i,
+);
 assert.doesNotThrow(
   () => assertNoPartialBasicFilter({ sheets: [{ properties: { title: "Főlap" }, basicFilter: { range: { startRowIndex: 0, startColumnIndex: 0, endColumnIndex: 27 } } }] }, "Főlap", 27),
+);
+assert.throws(
+  () => validateEmailRows([
+    emailHeader,
+    ["1001|ENROLLMENT|1|v1", "1001", "1", "v1", "one@example.invalid", "", "", "", "", "", "", false, "KÜLDHETŐ"],
+    ["1001|ENROLLMENT|1|v2", "1001", "1", "v2", "one@example.invalid", "", "", "", "", "", "", false, "KÜLDHETŐ"],
+  ]),
+  /Duplikált küldési szándék/i,
 );
 
 console.log("Recovery integrity tests passed.");

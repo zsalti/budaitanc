@@ -1,0 +1,102 @@
+{
+  "generated_at": "2026-08-27T21:11:59.761645+00:00",
+  "mode": "read_only",
+  "source": {
+    "pipeline_id": "tanctanfolyam_jelentkezes",
+    "master_tab": " TAGOK I FÉLÉV"
+  },
+  "counts": {
+    "master_rows": 195,
+    "email_output_rows": 195,
+    "email_event_rows": 88,
+    "duplicate_master_ids": 0,
+    "duplicate_send_keys": 0,
+    "duplicate_email_intents": 0,
+    "email_identity_issues": 0,
+    "stale_name_helper_candidates": 0,
+    "active_email_approvals": 8,
+    "email_event_types": {
+      "delivered": 44,
+      "request": 43,
+      "soft_bounce": 1
+    }
+  },
+  "findings": {
+    "duplicate_master_ids": {},
+    "duplicate_send_keys": {},
+    "duplicate_email_intents": [],
+    "email_identity_issues": [],
+    "stale_name_helper_candidates": [],
+    "active_email_approvals": [
+      {
+        "email_row": 183,
+        "entry_id": "1964"
+      },
+      {
+        "email_row": 184,
+        "entry_id": "1963"
+      },
+      {
+        "email_row": 185,
+        "entry_id": "1962"
+      },
+      {
+        "email_row": 186,
+        "entry_id": "1961"
+      },
+      {
+        "email_row": 187,
+        "entry_id": "1960"
+      },
+      {
+        "email_row": 188,
+        "entry_id": "1959"
+      },
+      {
+        "email_row": 189,
+        "entry_id": "1958"
+      },
+      {
+        "email_row": 192,
+        "entry_id": "1955"
+      }
+    ],
+    "latest_email_events": [
+      {
+        "event_row": 85,
+        "event": "Kézbesítve",
+        "raw_type": "delivered",
+        "event_at": "2026-08-27T14:38:43.000Z",
+        "received_at": "2026-08-27T14:38:49.934Z"
+      },
+      {
+        "event_row": 86,
+        "event": "Kézbesítve",
+        "raw_type": "delivered",
+        "event_at": "2026-08-27T14:19:47.000Z",
+        "received_at": "2026-08-27T15:57:31.032Z"
+      },
+      {
+        "event_row": 87,
+        "event": "Kézbesítve",
+        "raw_type": "delivered",
+        "event_at": "2026-08-27T14:19:50.000Z",
+        "received_at": "2026-08-27T15:57:31.022Z"
+      },
+      {
+        "event_row": 88,
+        "event": "Kézbesítve",
+        "raw_type": "delivered",
+        "event_at": "2026-08-27T14:19:47.000Z",
+        "received_at": "2026-08-27T15:57:31.273Z"
+      },
+      {
+        "event_row": 89,
+        "event": "Brevo fogadta",
+        "raw_type": "request",
+        "event_at": "2026-08-27T14:19:48.000Z",
+        "received_at": "2026-08-27T20:17:25.487Z"
+      }
+    ]
+  }
+}

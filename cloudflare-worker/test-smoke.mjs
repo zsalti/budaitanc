@@ -155,6 +155,33 @@ try {
   assert.equal(emailState[1][11], false, "piszkozat nem kapcsolhat be jóváhagyást");
   assert.equal(brevoRequests.length, 0, "piszkozat nem küldhet Brevo-levelet");
 
+  const historicalId = "TEST-CODEX-HISTORY-001";
+  masterState.push(masterState[1].map((value) => value));
+  masterState.at(-1)[0] = historicalId;
+  masterState.at(-1)[5] = "Korábbi Bizonyíték";
+  masterState.at(-1)[17] = "uj-cimzett@example.invalid";
+  masterState.at(-1)[44] = "";
+  masterState.at(-1)[45] = "";
+  const historicalEvidence = Array.from({ length: EMAIL_OUTPUT_HEADERS.length }, () => "");
+  historicalEvidence[0] = `${historicalId}|ENROLLMENT|2|v1`;
+  historicalEvidence[1] = historicalId;
+  historicalEvidence[2] = "2";
+  historicalEvidence[3] = "v1";
+  historicalEvidence[4] = "regi-cimzett@example.invalid";
+  historicalEvidence[12] = "KÉZBESÍTVE";
+  historicalEvidence[13] = "historical-message-id";
+  historicalEvidence[21] = "ENROLLMENT";
+  emailState.push(historicalEvidence);
+  const emailRowsBeforeHistoricalDraft = emailState.length;
+  const historicalDraft = await worker.fetch(new Request("https://example.test/emails/drafts/test-email-token", {
+    method: "POST", body: JSON.stringify({ pipeline_id: pipeline.pipeline_id, entry_ids: [historicalId] }),
+  }), env);
+  assert.equal(historicalDraft.status, 200);
+  const historicalResult = await historicalDraft.json();
+  assert.equal(historicalResult.manual, 1, "korábbi küldési bizonyíték más címzettnél is letiltja az új piszkozatot");
+  assert.equal(emailState.length, emailRowsBeforeHistoricalDraft, "történeti küldési bizonyíték mellé nem kerülhet második e-mail-sor");
+  assert.equal(brevoRequests.length, 0, "történeti bizonyíték ellenőrzése sem küldhet Brevo-levelet");
+
   console.log("Cloudflare Worker recovery smoke tests passed.");
 } finally {
   globalThis.fetch = originalFetch;

@@ -82,6 +82,7 @@ export function validateEmailRows(rows) {
   const header = rows?.[0] || [];
   assertHeaders(header, EMAIL_REQUIRED_HEADERS, "E-mail kimenet");
   const sendKeys = new Set();
+  const sendIntents = new Set();
   const entryIds = new Set();
   for (let index = 1; index < rows.length; index += 1) {
     const row = rows[index] || [];
@@ -93,9 +94,14 @@ export function validateEmailRows(rows) {
     }
     if (sendKeys.has(sendKey)) throw new Error(`Duplikált küldési kulcs az E-mail kimenetben: ${sendKey}.`);
     sendKeys.add(sendKey);
+    const intent = emailIntent(row, entryId, sendKey);
+    if (intent && sendIntents.has(intent)) {
+      throw new Error(`Duplikált küldési szándék az E-mail kimenetben: ${intent}.`);
+    }
+    if (intent) sendIntents.add(intent);
     entryIds.add(entryId);
   }
-  return { header, sendKeys, entryIds };
+  return { header, sendKeys, sendIntents, entryIds };
 }
 
 export function assertNoPartialBasicFilter(metadata, tabName, minimumColumnCount) {
@@ -107,9 +113,15 @@ export function assertNoPartialBasicFilter(metadata, tabName, minimumColumnCount
   const startColumn = Number(range.startColumnIndex || 0);
   const startRow = Number(range.startRowIndex || 0);
   const endColumn = Number(range.endColumnIndex || 0);
-  if (startRow !== 0 || startColumn !== 0 || endColumn < minimumColumnCount) {
+  const endRow = Number(range.endRowIndex || 0);
+  const sheetRowCount = Number(sheet.properties?.gridProperties?.rowCount || 0);
+  const partialRowRange = Boolean(endRow && sheetRowCount && endRow < sheetRowCount);
+  const hasSort = Array.isArray(filter.sortSpecs) && filter.sortSpecs.length > 0;
+  if (startRow !== 0 || startColumn !== 0 || endColumn < minimumColumnCount || partialRowRange || hasSort) {
     throw new Error(
-      `A fő Sheet alapszűrője csak részleges tartományt fed le (${startColumn}:${endColumn}). Távolítsd el, vagy a teljes fejlécszélességre állítsd be.`,
+      hasSort
+        ? "A fő Sheet alapszűrője rendezést tartalmaz. Távolítsd el, és napi rendezéshez használj külön Filter view-t."
+        : `A fő Sheet alapszűrője csak részleges tartományt fed le (${startColumn}:${endColumn}, sorok: ${startRow}:${endRow || "vége"}). Távolítsd el, vagy a teljes táblaszélességre állítsd be.`,
     );
   }
 }
@@ -157,6 +169,13 @@ function validateInputRegistrations(registrations) {
   }
   if (!registrations?.length) throw new Error("A CSV nem tartalmaz feldolgozható jelentkezést.");
   return registrations;
+}
+
+function emailIntent(row, entryId, sendKey) {
+  const keyParts = sendKey.split("|");
+  const eventType = text(row[21]) || text(keyParts[1]);
+  const period = text(row[2]) || text(keyParts[2]);
+  return eventType && period ? `${entryId}|${eventType}|${period}` : "";
 }
 
 function assertHeaders(header, expected, name) {
