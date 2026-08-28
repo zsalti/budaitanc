@@ -205,10 +205,11 @@ frissítendő, változatlan és a fő Sheetből hiányzó munkatársi sorokat, v
 az esetleg létrehozandó három oszlopot. Sem preview, sem hibás token nem ír.
 
 Az `mode: "execute"` csak akkor ír, ha az előnézet tervhash-e változatlan,
-megadnak egy friss, a munkatársi Sheetről készített Drive-másolat azonosítót,
-és az előnézet utáni újraolvasás is ugyanazt a tervet adja. Ha törlendő sor
-lenne, az `allow_deletes: true` külön, emberi megerősítése is kötelező. Az
-írás után a Worker visszaolvassa és ellenőrzi az összes szinkronizált sort.
+megadnak egy legfeljebb 60 perces, a munkatársi Sheet előnézetkori állapotával
+tartalmi hash szerint egyező Drive-másolat azonosítót, és az előnézet utáni
+újraolvasás is ugyanazt a tervet adja. Ha törlendő sor lenne, az
+`allow_deletes: true` külön, emberi megerősítése is kötelező. Az írás után a
+Worker visszaolvassa és ellenőrzi az összes szinkronizált sort.
 Egy nem üres, de ID nélküli vagy duplikált ID-jú munkatársi sor azonnal
 megállítja a folyamatot.
 

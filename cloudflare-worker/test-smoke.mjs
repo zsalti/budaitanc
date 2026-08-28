@@ -43,6 +43,7 @@ const masterHeader = [
 ];
 const masterState = [masterHeader];
 const staffState = [[...masterHeader.slice(0, 8)]];
+let staffBackupState = staffState.map((row) => [...row]);
 const emailState = [[...EMAIL_OUTPUT_HEADERS]];
 const configState = [[
   "Tanfolyam kulcs", "GF pontos érték / alias", "Nap", "Kezdés", "Befejezés", "Helyszín", "Tanár", "Heti alkalom", "Perc/alkalom", "Díjkategória", "Kézi elbírálás",
@@ -69,6 +70,9 @@ const backupDetails = new Map([
   ["test-backup-stale", { createdTime: staleBackupCreatedAt, modifiedTime: staleBackupCreatedAt, parents: ["test-backup-folder"], capabilities: { canEdit: true }, snapshot: "matching" }],
   ["test-backup-foreign", { createdTime: newestBackupCreatedAt, modifiedTime: newestBackupCreatedAt, parents: ["other-folder"], capabilities: { canEdit: true }, snapshot: "matching" }],
   ["test-backup-slot", { createdTime: staleBackupCreatedAt, modifiedTime: staleBackupCreatedAt, parents: ["test-backup-folder"], capabilities: { canEdit: true }, snapshot: "slot" }],
+  ["test-staff-backup", { createdTime: backupCreatedAt, modifiedTime: backupCreatedAt, parents: ["test-backup-folder"], capabilities: { canEdit: true }, snapshot: "staff-matching" }],
+  ["test-staff-backup-stale", { createdTime: staleBackupCreatedAt, modifiedTime: staleBackupCreatedAt, parents: ["test-backup-folder"], capabilities: { canEdit: true }, snapshot: "staff-matching" }],
+  ["test-staff-backup-mismatch", { createdTime: newestBackupCreatedAt, modifiedTime: newestBackupCreatedAt, parents: ["test-backup-folder"], capabilities: { canEdit: true }, snapshot: "staff-mismatch" }],
 ]);
 
 globalThis.fetch = async (input, options = {}) => {
@@ -101,6 +105,11 @@ globalThis.fetch = async (input, options = {}) => {
     ] }), { status: 200 });
   }
   if (url.includes("test-staff-spreadsheet?fields=")) {
+    return new Response(JSON.stringify({ sheets: [
+      { properties: { sheetId: 7, title: pipeline.staff_target.tab_name, gridProperties: { rowCount: 1000, columnCount: 26 } } },
+    ] }), { status: 200 });
+  }
+  if (url.includes("test-staff-backup") && url.includes("?fields=")) {
     return new Response(JSON.stringify({ sheets: [
       { properties: { sheetId: 7, title: pipeline.staff_target.tab_name, gridProperties: { rowCount: 1000, columnCount: 26 } } },
     ] }), { status: 200 });
@@ -241,8 +250,20 @@ try {
   assert.equal(syncLocked.status, 503, "a karbantartási zár az execute módot megállítja");
   assert.equal(staffState.length, 1);
 
+  const staleSyncBackup = await syncRequest({
+    mode: "execute", plan_hash: syncPreviewResult.plan_hash, backup_id: "test-staff-backup-stale",
+  });
+  assert.equal(staleSyncBackup.status, 500, "régi munkatársi Sheet backup mellett nincs írás");
+  assert.equal(staffState.length, 1);
+
+  const mismatchingSyncBackup = await syncRequest({
+    mode: "execute", plan_hash: syncPreviewResult.plan_hash, backup_id: "test-staff-backup-mismatch",
+  });
+  assert.equal(mismatchingSyncBackup.status, 500, "eltérő munkatársi Sheet backup mellett nincs írás");
+  assert.equal(staffState.length, 1);
+
   const syncExecuted = await syncRequest({
-    mode: "execute", plan_hash: syncPreviewResult.plan_hash, backup_id: "test-backup",
+    mode: "execute", plan_hash: syncPreviewResult.plan_hash, backup_id: "test-staff-backup",
   });
   assert.equal(syncExecuted.status, 200);
   const syncExecutedResult = await syncExecuted.json();
@@ -254,18 +275,19 @@ try {
   ], "a végrehajtás csak jóváhagyott tervből hozza létre a szinkronoszlopokat");
 
   staffState.push(["TEST-CODEX-STALE-001", "Régi", "sor"]);
+  staffBackupState = staffState.map((row) => [...row]);
   const staleSyncPreview = await syncRequest({ mode: "preview" });
   assert.equal(staleSyncPreview.status, 200);
   const staleSyncPreviewResult = await staleSyncPreview.json();
   assert.equal(staleSyncPreviewResult.deleted, 1, "a preview kimutatja a törlendő, fő Sheetből hiányzó sort");
   assert.equal(staffState.length, 3, "a preview törlésmentes");
   const deleteWithoutConfirmation = await syncRequest({
-    mode: "execute", plan_hash: staleSyncPreviewResult.plan_hash, backup_id: "test-backup",
+    mode: "execute", plan_hash: staleSyncPreviewResult.plan_hash, backup_id: "test-staff-backup",
   });
   assert.equal(deleteWithoutConfirmation.status, 409, "törlés külön megerősítés nélkül nem indulhat");
   assert.equal(staffState.length, 3);
   const confirmedDelete = await syncRequest({
-    mode: "execute", plan_hash: staleSyncPreviewResult.plan_hash, backup_id: "test-backup", allow_deletes: true,
+    mode: "execute", plan_hash: staleSyncPreviewResult.plan_hash, backup_id: "test-staff-backup", allow_deletes: true,
   });
   assert.equal(confirmedDelete.status, 200);
   assert.equal(staffState.length, 2, "a jóváhagyott törlés a friss tervből, visszaolvasással zárul");
@@ -381,6 +403,8 @@ async function syncRequest(payload, selectedEnv = env) {
 }
 
 function stateForRead(url) {
+  if (url.includes("test-staff-backup-mismatch")) return [[...masterHeader.slice(0, 8)], ["TEST-CODEX-BACKUP-MISMATCH"]];
+  if (url.includes("test-staff-backup")) return staffBackupState;
   if (url.includes("test-backup-slot")) {
     return url.includes("E-mail kimenet") ? backupSlotEmailState : backupSlotMasterState;
   }

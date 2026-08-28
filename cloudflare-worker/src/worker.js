@@ -52,6 +52,7 @@ const STAFF_ADDITIONAL_SYNC_HEADERS = [
   "Egyéb megjegyzés",
 ];
 const DEFAULT_IMPORT_BACKUP_MAX_AGE_MINUTES = 60;
+const DEFAULT_STAFF_SYNC_BACKUP_MAX_AGE_MINUTES = 60;
 const inFlightSends = new Set();
 const inFlightBrevoEvents = new Map();
 
@@ -527,9 +528,10 @@ async function handleSync(request, env, token) {
         ...staffSyncPlanSummary(plan),
       }, 409);
     }
-    const backup = await verifyImportBackup(
+    const backup = await verifyStaffSyncBackup(
       accessToken,
       pipeline.staff_target.spreadsheet_id,
+      plan,
       text(payload.backup_id),
     );
     // A preview nem jogosít fel vak írásra: közvetlenül a végrehajtás előtt
@@ -1161,6 +1163,23 @@ async function verifyImportBackup(accessToken, productionSpreadsheetId, backupId
   };
 }
 
+async function verifyStaffSyncBackup(accessToken, staffSpreadsheetId, plan, backupId) {
+  const backup = await verifyImportBackup(accessToken, staffSpreadsheetId, backupId);
+  const snapshotAtMillis = Date.parse(backup.snapshot_at);
+  if (!Number.isFinite(snapshotAtMillis)) {
+    throw new Error("A munkatársi Sheet backup frissítési ideje érvénytelen.");
+  }
+  const ageMinutes = (Date.now() - snapshotAtMillis) / 60_000;
+  if (ageMinutes < -5 || ageMinutes > DEFAULT_STAFF_SYNC_BACKUP_MAX_AGE_MINUTES) {
+    throw new Error(`A munkatársi Sheet backup nem elég friss (${Math.max(0, Math.round(ageMinutes))} perc; legfeljebb ${DEFAULT_STAFF_SYNC_BACKUP_MAX_AGE_MINUTES} perc lehet).`);
+  }
+  const backupRows = await readSheetRows(accessToken, backup.id, plan.target.tab_name, "A:ZZ");
+  if (!safeEqual(await semanticHash(backupRows), plan.staff_snapshot_sha256)) {
+    throw new Error("A munkatársi Sheet backup tartalma nem egyezik az előnézetkori állapottal.");
+  }
+  return backup;
+}
+
 function importBackupSource(env, pipeline) {
   if (!env.IMPORT_BACKUP_SOURCE_CONFIG_JSON) {
     throw new Error("Hiányzik az IMPORT_BACKUP_SOURCE_CONFIG_JSON. Normál importhoz nincs konfigurált, megbízható Drive backup-forrás.");
@@ -1605,6 +1624,7 @@ async function buildStaffSyncPlan(accessToken, pipeline) {
     updated: updatedEntryIds.length,
     unchanged,
     total: registrations.length,
+    staff_snapshot_sha256: planPayload.staff_snapshot_sha256,
     plan_hash: await sha256(JSON.stringify(planPayload)),
   };
 }
