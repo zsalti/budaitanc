@@ -23,12 +23,19 @@ const env = {
   SYNC_ADMIN_TOKEN: "test-sync-token",
   IMPORT_BACKUP_SOURCE_CONFIG_JSON: JSON.stringify({ sources: [{
     pipeline_id: pipeline.pipeline_id, folder_id: "test-backup-folder", max_age_minutes: 60,
+    refresh_backup_id: "test-backup-slot",
   }] }),
   IMPORT_EMERGENCY_ADMIN_TOKEN: "test-emergency-token",
   BREVO_API_KEY: "test-brevo-key",
   BREVO_SENDER_EMAIL: "sender@example.invalid",
   BREVO_WEBHOOK_SECRET: "test-brevo-webhook-secret",
   RECOVERY_MAINTENANCE_MODE: "off",
+};
+const noRefreshEnv = {
+  ...env,
+  IMPORT_BACKUP_SOURCE_CONFIG_JSON: JSON.stringify({ sources: [{
+    pipeline_id: pipeline.pipeline_id, folder_id: "test-backup-folder", max_age_minutes: 60,
+  }] }),
 };
 
 const masterHeader = [
@@ -48,6 +55,8 @@ const settingsState = emailSettingsSheetRows();
 let templateId = 101;
 for (const row of settingsState) if (String(row[0] || "").startsWith("TEMPLATE_")) row[1] = templateId++;
 let partialFilter = false;
+let backupSlotMasterState = [["Régi backup"]];
+let backupSlotEmailState = [["Régi backup"]];
 const originalFetch = globalThis.fetch;
 const brevoRequests = [];
 const backupCreatedAt = new Date(Date.now() - 60_000).toISOString();
@@ -55,10 +64,11 @@ const newestBackupCreatedAt = new Date().toISOString();
 const staleBackupCreatedAt = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
 let backupCandidates = [];
 const backupDetails = new Map([
-  ["test-backup", { createdTime: backupCreatedAt, parents: ["test-backup-folder"], snapshot: "matching" }],
-  ["test-backup-corrupt", { createdTime: newestBackupCreatedAt, parents: ["test-backup-folder"], snapshot: "corrupt" }],
-  ["test-backup-stale", { createdTime: staleBackupCreatedAt, parents: ["test-backup-folder"], snapshot: "matching" }],
-  ["test-backup-foreign", { createdTime: newestBackupCreatedAt, parents: ["other-folder"], snapshot: "matching" }],
+  ["test-backup", { createdTime: backupCreatedAt, modifiedTime: backupCreatedAt, parents: ["test-backup-folder"], capabilities: { canEdit: true }, snapshot: "matching" }],
+  ["test-backup-corrupt", { createdTime: newestBackupCreatedAt, modifiedTime: newestBackupCreatedAt, parents: ["test-backup-folder"], capabilities: { canEdit: true }, snapshot: "corrupt" }],
+  ["test-backup-stale", { createdTime: staleBackupCreatedAt, modifiedTime: staleBackupCreatedAt, parents: ["test-backup-folder"], capabilities: { canEdit: true }, snapshot: "matching" }],
+  ["test-backup-foreign", { createdTime: newestBackupCreatedAt, modifiedTime: newestBackupCreatedAt, parents: ["other-folder"], capabilities: { canEdit: true }, snapshot: "matching" }],
+  ["test-backup-slot", { createdTime: staleBackupCreatedAt, modifiedTime: staleBackupCreatedAt, parents: ["test-backup-folder"], capabilities: { canEdit: true }, snapshot: "slot" }],
 ]);
 
 globalThis.fetch = async (input, options = {}) => {
@@ -100,6 +110,19 @@ globalThis.fetch = async (input, options = {}) => {
       { properties: { sheetId: 1, title: pipeline.tab_name, gridProperties: { rowCount: 1000, columnCount: 46 } } },
       { properties: { sheetId: 2, title: "E-mail kimenet", gridProperties: { rowCount: 1000, columnCount: 34 } } },
     ] }), { status: 200 });
+  }
+  if (url.includes("test-backup-slot/values:batchClear")) {
+    backupSlotMasterState = [];
+    backupSlotEmailState = [];
+    return new Response(JSON.stringify({ clearedRanges: [] }), { status: 200 });
+  }
+  if (url.includes("test-backup-slot/values:batchUpdate")) {
+    for (const item of JSON.parse(options.body).data) {
+      if (item.range.includes("E-mail kimenet")) backupSlotEmailState = item.values.map((row) => [...row]);
+      else backupSlotMasterState = item.values.map((row) => [...row]);
+    }
+    backupDetails.get("test-backup-slot").modifiedTime = new Date().toISOString();
+    return new Response(JSON.stringify({}), { status: 200 });
   }
   if (url.includes("/values:batchUpdate")) {
     for (const item of JSON.parse(options.body).data) applyRange(item.range, item.values[0]);
@@ -160,19 +183,19 @@ try {
   assert.equal(masterState.length, 1);
 
   backupCandidates = ["test-backup-corrupt"];
-  const corruptBackup = await importRequest("execute", fixture, planHash);
+  const corruptBackup = await importRequest("execute", fixture, planHash, noRefreshEnv);
   assert.equal(corruptBackup.status, 400);
   assert.match(await corruptBackup.text(), /Most nem tudjuk biztonságosan elindítani az importot/i);
   assert.equal(masterState.length, 1, "sérült backup mellett nincs import");
 
   backupCandidates = ["test-backup-stale"];
-  const staleBackup = await importRequest("execute", fixture, planHash);
+  const staleBackup = await importRequest("execute", fixture, planHash, noRefreshEnv);
   assert.equal(staleBackup.status, 400);
   assert.match(await staleBackup.text(), /Most nem tudjuk biztonságosan elindítani az importot/i);
   assert.equal(masterState.length, 1, "régi backup mellett nincs import");
 
   backupCandidates = ["test-backup-foreign"];
-  const foreignBackup = await importRequest("execute", fixture, planHash);
+  const foreignBackup = await importRequest("execute", fixture, planHash, noRefreshEnv);
   assert.equal(foreignBackup.status, 400);
   assert.match(await foreignBackup.text(), /Most nem tudjuk biztonságosan elindítani az importot/i);
   assert.equal(masterState.length, 1, "idegen mappából származó backup mellett nincs import");
@@ -187,13 +210,17 @@ try {
   assert.match(await deniedEmergencyOverride.text(), /Most nem tudjuk biztonságosan elindítani az importot/i);
   assert.equal(masterState.length, 1, "a kézi vészfelülbírálás külön admin token nélkül sem írhat");
 
-  backupCandidates = ["test-backup-corrupt", "test-backup"];
+  backupCandidates = ["test-backup-corrupt"];
   const executed = await importRequest("execute", fixture, planHash);
   assert.equal(executed.status, 200);
   const executedHtml = await executed.text();
   assert.match(executedHtml, /1 új jelentkezés bekerült/);
   assert.match(executedHtml, /e-mailt sem küldtünk/i);
   assert.doesNotMatch(executedHtml.match(/<main>([\s\S]*?)<\/main>/)?.[1] || "", /Drive-backup|terv hash|Brevo/i);
+  assert.deepEqual(backupSlotMasterState, [masterHeader],
+    "az automatikusan frissített backupnak az import előtti főlapot kell megőriznie");
+  assert.deepEqual(backupSlotEmailState, [[...EMAIL_OUTPUT_HEADERS]],
+    "az automatikusan frissített backupnak az import előtti e-mail-lapot kell megőriznie");
   const draftGrant = executedHtml.match(/name="draft_grant" value="([^"]+)"/)?.[1];
   assert.ok(draftGrant, "a frissen importált ID-khoz időkorlátos piszkozatjogosultság készül");
   assert.equal(masterState.length, 2);
@@ -354,6 +381,9 @@ async function syncRequest(payload, selectedEnv = env) {
 }
 
 function stateForRead(url) {
+  if (url.includes("test-backup-slot")) {
+    return url.includes("E-mail kimenet") ? backupSlotEmailState : backupSlotMasterState;
+  }
   if (url.includes("test-backup-corrupt") && url.includes("E-mail kimenet")) return [["Sérült backup"]];
   if (url.includes("test-staff-spreadsheet")) return staffState;
   if (url.includes("Tanfolyamok")) return configState;

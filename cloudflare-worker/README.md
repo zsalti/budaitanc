@@ -127,8 +127,12 @@ Egy jelölt backup csak akkor fogadható el, ha a megbízható mappában van, ne
 régebbi a konfigurált `max_age_minutes` értéknél, ugyanazokat a kötelező
 fő- és e-mail-lapfejléceket tartalmazza, és a fő Sheet és az `E-mail kimenet`
 tartalmi hash-e pontosan egyezik a végrehajtás előtti production pillanatképpel.
-Ha nincs ilyen fájl, az import biztonságosan megáll, nem kér kézi ID-t és nem
-ír Sheetbe.
+Ha nincs ilyen friss fájl, a Worker a `refresh_backup_id` alatt konfigurált,
+szerkeszthető Google Sheet backupot automatikusan frissíti a közvetlenül az
+import előtt visszaolvasott fő- és e-mail-lappal. Ez nem hoz létre új Drive-fájlt,
+így a szolgáltatási fiók Drive-kvótáját sem használja. A Worker a frissített
+backupot teljesen visszaolvassa és csak pontos tartalmi egyezés után írhat a
+production Sheetbe.
 
 A kézi backup-ID nincs az UI-ban. Csak rendkívüli API-s admin felülbírálással
 használható, külön `IMPORT_EMERGENCY_ADMIN_TOKEN`,
@@ -147,9 +151,9 @@ Az import eredményoldala a tervből automatikusan kiválasztott, friss ID-kra
 ID-listát megadni. A piszkozatkészítés nem kapcsol be jóváhagyást és nem küld
 Brevo-levelet.
 
-Az automatikus forrásmappába egy külön üzemeltetői folyamatnak friss
-Drive-másolatot kell tennie. A Worker ezt maga választja ki; a felhasználó az
-import UI-ban nem másol és nem ad meg azonosítót.
+Az import felhasználójának nem kell backupot készítenie vagy azonosítót megadnia.
+Új backup-fájl létrehozása továbbra is lehetséges külön üzemeltetői műveletként,
+de a normál import működésének ez nem feltétele.
 
 ```bash
 python3 scripts/create_production_sheet_backup.py \

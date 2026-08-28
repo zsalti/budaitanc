@@ -1101,6 +1101,16 @@ async function readImportSnapshot(accessToken, pipeline) {
   return { metadata, masterRows, emailRows };
 }
 
+async function readImportBackupSnapshot(accessToken, pipeline) {
+  const [masterRows, emailRows] = await Promise.all([
+    readSheetRows(accessToken, pipeline.spreadsheet_id, pipeline.tab_name, "A:AT"),
+    readSheetRows(accessToken, pipeline.spreadsheet_id, EMAIL_OUTPUT_TAB, "A:AH"),
+  ]);
+  validateMasterRows(masterRows);
+  validateEmailRows(emailRows);
+  return { masterRows, emailRows };
+}
+
 async function appendOnlyMasterRegistrations(accessToken, pipeline, beforeRows, plan) {
   if (!plan.newRegistrations.length) {
     return { results: [], verification: { old_records_unchanged: true, appended_records: 0 } };
@@ -1138,15 +1148,16 @@ async function appendOnlyMasterRegistrations(accessToken, pipeline, beforeRows, 
 async function verifyImportBackup(accessToken, productionSpreadsheetId, backupId) {
   if (!backupId) throw new Error("Hiányzik a Drive-backup azonosítója.");
   if (backupId === productionSpreadsheetId) throw new Error("A backup nem lehet azonos a production Sheettel.");
-  const url = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(backupId)}?fields=${encodeURIComponent("id,name,mimeType,createdTime,trashed,parents")}&supportsAllDrives=true`;
+  const url = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(backupId)}?fields=${encodeURIComponent("id,name,mimeType,createdTime,modifiedTime,trashed,parents,capabilities(canEdit)")}&supportsAllDrives=true`;
   const backup = await googleFetch(url, accessToken);
   if (backup.trashed || backup.mimeType !== "application/vnd.google-apps.spreadsheet") {
     throw new Error("A megadott backup nem elérhető Google Sheets Drive-másolat.");
   }
   return {
     id: text(backup.id),
-    created_at: text(backup.createdTime),
+    snapshot_at: text(backup.modifiedTime) || text(backup.createdTime),
     parent_ids: Array.isArray(backup.parents) ? backup.parents.map(text).filter(Boolean) : [],
+    can_edit: backup.capabilities?.canEdit === true,
   };
 }
 
@@ -1169,7 +1180,11 @@ function importBackupSource(env, pipeline) {
   if (!Number.isFinite(maxAgeMinutes) || maxAgeMinutes < 1 || maxAgeMinutes > 24 * 60) {
     throw new Error("A backup-forrás max_age_minutes értéke 1 és 1440 közötti egész perc legyen.");
   }
-  return { folderId: text(source.folder_id), maxAgeMinutes };
+  const refreshBackupId = text(source.refresh_backup_id);
+  if (refreshBackupId === pipeline.spreadsheet_id) {
+    throw new Error("A frissíthető backup nem lehet azonos a production Sheettel.");
+  }
+  return { folderId: text(source.folder_id), maxAgeMinutes, refreshBackupId };
 }
 
 async function resolveImportBackupForExecution(request, env, accessToken, pipeline, snapshot, form) {
@@ -1203,7 +1218,53 @@ async function resolveAutomaticImportBackup(accessToken, env, pipeline, snapshot
       }));
     }
   }
+  if (source.refreshBackupId) {
+    return refreshAutomaticImportBackup(accessToken, pipeline, snapshot, source);
+  }
   throw new Error("Nincs friss, sértetlen és a production Sheettel egyező Drive-backup a konfigurált forrásban. Az import nem indult el.");
+}
+
+async function refreshAutomaticImportBackup(accessToken, pipeline, snapshot, source) {
+  const backup = await verifyImportBackup(accessToken, pipeline.spreadsheet_id, source.refreshBackupId);
+  if (!backup.parent_ids.includes(source.folderId)) {
+    throw new Error("A frissíthető Drive-backup nem a konfigurált backup-mappában van.");
+  }
+  if (!backup.can_edit) {
+    throw new Error("A frissíthető Drive-backup nem szerkeszthető.");
+  }
+
+  const metadata = await getSpreadsheetMetadata(accessToken, backup.id);
+  const masterTitle = findSheetTitle(metadata, pipeline.tab_name);
+  const emailTitle = findSheetTitle(metadata, EMAIL_OUTPUT_TAB);
+  if (!masterTitle || !emailTitle) {
+    throw new Error("A frissíthető Drive-backupból hiányzik a főlap vagy az e-mail-lap.");
+  }
+
+  await clearSheetRanges(accessToken, backup.id, [
+    `${quoteSheetName(masterTitle)}!A:AT`,
+    `${quoteSheetName(emailTitle)}!A:AH`,
+  ]);
+  await writeSheetRanges(accessToken, backup.id, [
+    {
+      range: `${quoteSheetName(masterTitle)}!A1:AT${snapshot.masterRows.length}`,
+      values: snapshot.masterRows,
+    },
+    {
+      range: `${quoteSheetName(emailTitle)}!A1:AH${snapshot.emailRows.length}`,
+      values: snapshot.emailRows,
+    },
+  ]);
+
+  const refreshed = { ...backup, snapshot_at: new Date().toISOString() };
+  const validated = await validateImportBackupForSnapshot(accessToken, pipeline, snapshot, refreshed, source, {
+    requireConfiguredFolder: true,
+    selection: "automatic_refreshed_slot",
+  });
+  console.info("Refreshed automatic import backup", JSON.stringify({
+    pipeline_id: pipeline.pipeline_id,
+    backup_id: backup.id,
+  }));
+  return validated;
 }
 
 async function resolveEmergencyImportBackupOverride(request, env, accessToken, pipeline, snapshot, backupId) {
@@ -1233,16 +1294,16 @@ async function verifyImportBackupFolder(accessToken, folderId) {
 
 async function listImportBackupCandidates(accessToken, folderId) {
   const query = `'${folderId}' in parents and trashed=false and mimeType='application/vnd.google-apps.spreadsheet'`;
-  const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&orderBy=createdTime desc&fields=${encodeURIComponent("files(id,createdTime,mimeType,trashed,parents)")}&pageSize=50&supportsAllDrives=true&includeItemsFromAllDrives=true`;
+  const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&orderBy=modifiedTime desc&fields=${encodeURIComponent("files(id,createdTime,modifiedTime,mimeType,trashed,parents)")}&pageSize=50&supportsAllDrives=true&includeItemsFromAllDrives=true`;
   const result = await googleFetch(url, accessToken);
   return (Array.isArray(result.files) ? result.files : [])
-    .sort((left, right) => Date.parse(text(right.createdTime)) - Date.parse(text(left.createdTime)));
+    .sort((left, right) => Date.parse(text(right.modifiedTime || right.createdTime)) - Date.parse(text(left.modifiedTime || left.createdTime)));
 }
 
 async function validateImportBackupForSnapshot(accessToken, pipeline, snapshot, backup, source, options) {
-  const createdAtMillis = Date.parse(backup.created_at);
-  if (!Number.isFinite(createdAtMillis)) throw new Error("A Drive-backup létrehozási ideje érvénytelen.");
-  const ageMinutes = (Date.now() - createdAtMillis) / 60_000;
+  const snapshotAtMillis = Date.parse(backup.snapshot_at);
+  if (!Number.isFinite(snapshotAtMillis)) throw new Error("A Drive-backup frissítési ideje érvénytelen.");
+  const ageMinutes = (Date.now() - snapshotAtMillis) / 60_000;
   if (ageMinutes < -5 || ageMinutes > source.maxAgeMinutes) {
     throw new Error(`A Drive-backup nem elég friss (${Math.max(0, Math.round(ageMinutes))} perc; legfeljebb ${source.maxAgeMinutes} perc lehet).`);
   }
@@ -1250,7 +1311,7 @@ async function validateImportBackupForSnapshot(accessToken, pipeline, snapshot, 
     throw new Error("A Drive-backup nem a konfigurált, megbízható backup-forrásból származik.");
   }
   const backupPipeline = { ...pipeline, spreadsheet_id: backup.id };
-  const backupSnapshot = await readImportSnapshot(accessToken, backupPipeline);
+  const backupSnapshot = await readImportBackupSnapshot(accessToken, backupPipeline);
   const [expectedMasterHash, expectedEmailHash, backupMasterHash, backupEmailHash] = await Promise.all([
     semanticHash(snapshot.masterRows),
     semanticHash(snapshot.emailRows),
@@ -1262,7 +1323,7 @@ async function validateImportBackupForSnapshot(accessToken, pipeline, snapshot, 
   }
   return {
     id: backup.id,
-    created_at: backup.created_at,
+    snapshot_at: backup.snapshot_at,
     selection: options.selection,
     source_folder_id: options.requireConfiguredFolder ? source.folderId : "",
   };
@@ -2698,6 +2759,14 @@ async function writeSheetRanges(accessToken, spreadsheetId, data) {
   });
 }
 
+async function clearSheetRanges(accessToken, spreadsheetId, ranges) {
+  const baseUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}`;
+  await googleFetch(`${baseUrl}/values:batchClear`, accessToken, {
+    method: "POST",
+    body: JSON.stringify({ ranges }),
+  });
+}
+
 async function appendSheetRows(accessToken, spreadsheetId, tabName, values) {
   const baseUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}`;
   const range = encodeURIComponent(`${quoteSheetName(tabName)}!A:I`);
@@ -2710,6 +2779,15 @@ async function appendSheetRows(accessToken, spreadsheetId, tabName, values) {
 async function getSpreadsheetMetadata(accessToken, spreadsheetId) {
   const baseUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}`;
   return googleFetch(`${baseUrl}?fields=sheets(properties(sheetId,title,gridProperties(rowCount,columnCount)),basicFilter,conditionalFormats)`, accessToken);
+}
+
+function findSheetTitle(metadata, requestedTitle) {
+  const requested = requestedTitle == null ? "" : String(requestedTitle);
+  const exact = (metadata.sheets || []).find((item) => String(item.properties?.title ?? "") === requested);
+  if (exact) return String(exact.properties.title);
+  const trimmed = requested.trim();
+  const equivalent = (metadata.sheets || []).find((item) => String(item.properties?.title ?? "").trim() === trimmed);
+  return equivalent ? String(equivalent.properties.title) : "";
 }
 
 function spreadsheetColumnNumber(column) {

@@ -3,6 +3,7 @@
     {
       "pipeline_id": "tanctanfolyam_jelentkezes",
       "folder_id": "replace_me",
+      "refresh_backup_id": "replace_with_existing_editable_sheet",
       "max_age_minutes": 60
     }
   ]
