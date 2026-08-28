@@ -131,12 +131,25 @@ try {
   }), env);
   assert.equal(webhook.status, 410);
 
+  const importScreen = await worker.fetch(new Request("https://example.test/import/test-import-token"), env);
+  assert.equal(importScreen.status, 200);
+  const importScreenHtml = await importScreen.text();
+  assert.match(importScreenHtml, /Új jelentkezések hozzáadása/);
+  assert.match(importScreenHtml, /let selectedFile = null/);
+  assert.match(importScreenHtml, /data\.set\("file", selectedFile, selectedFile\.name\)/,
+    "a böngészőnek ugyanazt az egyszer kiválasztott fájlt kell továbbadnia");
+
   const planned = await importRequest("plan", fixture);
   assert.equal(planned.status, 200);
   const plannedHtml = await planned.text();
-  assert.match(plannedHtml, /Import előnézet/);
+  assert.match(plannedHtml, /A fájl rendben van/);
   assert.doesNotMatch(plannedHtml, /name="backup_id"/, "a normál import UI nem kérhet kézi backup-ID-t");
-  assert.match(plannedHtml, /automatikusan választ friss, ellenőrzött backupot/i);
+  const plannedMain = plannedHtml.match(/<main>([\s\S]*?)<\/main>/)?.[1] || "";
+  assert.doesNotMatch(plannedMain, /type="file"/,
+    "az előnézet nem kérheti be másodszor ugyanazt a fájlt");
+  assert.doesNotMatch(plannedMain, /append-only|terv hash|Drive-backup|production|Sheet-pillanatkép/i,
+    "a felhasználói képernyő nem mutathat belső governance-szöveget");
+  assert.match(plannedMain, /data-reuses-file/);
   const planHash = plannedHtml.match(/name="plan_hash" value="([a-f0-9]{64})"/)?.[1];
   assert.ok(planHash);
   assert.equal(masterState.length, 1, "a dry run nem írhat");
@@ -149,37 +162,38 @@ try {
   backupCandidates = ["test-backup-corrupt"];
   const corruptBackup = await importRequest("execute", fixture, planHash);
   assert.equal(corruptBackup.status, 400);
-  assert.match(await corruptBackup.text(), /Nincs friss, sértetlen/i);
+  assert.match(await corruptBackup.text(), /Most nem tudjuk biztonságosan elindítani az importot/i);
   assert.equal(masterState.length, 1, "sérült backup mellett nincs import");
 
   backupCandidates = ["test-backup-stale"];
   const staleBackup = await importRequest("execute", fixture, planHash);
   assert.equal(staleBackup.status, 400);
-  assert.match(await staleBackup.text(), /Nincs friss, sértetlen/i);
+  assert.match(await staleBackup.text(), /Most nem tudjuk biztonságosan elindítani az importot/i);
   assert.equal(masterState.length, 1, "régi backup mellett nincs import");
 
   backupCandidates = ["test-backup-foreign"];
   const foreignBackup = await importRequest("execute", fixture, planHash);
   assert.equal(foreignBackup.status, 400);
-  assert.match(await foreignBackup.text(), /Nincs friss, sértetlen/i);
+  assert.match(await foreignBackup.text(), /Most nem tudjuk biztonságosan elindítani az importot/i);
   assert.equal(masterState.length, 1, "idegen mappából származó backup mellett nincs import");
 
   const legacyManualBackup = await importRequest("execute", fixture, planHash, env, "test-backup");
   assert.equal(legacyManualBackup.status, 400);
-  assert.match(await legacyManualBackup.text(), /nem fogad kézzel megadott backup-ID-t/i);
+  assert.match(await legacyManualBackup.text(), /Most nem tudjuk biztonságosan elindítani az importot/i);
   assert.equal(masterState.length, 1, "normál import kézi backup-ID-val sem írhat");
 
   const deniedEmergencyOverride = await emergencyImportRequest(planHash);
   assert.equal(deniedEmergencyOverride.status, 400);
-  assert.match(await deniedEmergencyOverride.text(), /X-Import-Emergency-Token/i);
+  assert.match(await deniedEmergencyOverride.text(), /Most nem tudjuk biztonságosan elindítani az importot/i);
   assert.equal(masterState.length, 1, "a kézi vészfelülbírálás külön admin token nélkül sem írhat");
 
   backupCandidates = ["test-backup-corrupt", "test-backup"];
   const executed = await importRequest("execute", fixture, planHash);
   assert.equal(executed.status, 200);
   const executedHtml = await executed.text();
-  assert.match(executedHtml, /E-mail-piszkozat vagy Brevo-küldés: 0/);
-  assert.match(executedHtml, /Automatikusan kiválasztott, igazolt Drive-backup: <code>test-backup<\/code>/);
+  assert.match(executedHtml, /1 új jelentkezés bekerült/);
+  assert.match(executedHtml, /e-mailt sem küldtünk/i);
+  assert.doesNotMatch(executedHtml.match(/<main>([\s\S]*?)<\/main>/)?.[1] || "", /Drive-backup|terv hash|Brevo/i);
   const draftGrant = executedHtml.match(/name="draft_grant" value="([^"]+)"/)?.[1];
   assert.ok(draftGrant, "a frissen importált ID-khoz időkorlátos piszkozatjogosultság készül");
   assert.equal(masterState.length, 2);
@@ -242,21 +256,21 @@ try {
     .replace("Codex Teszt Dami", "Codex Teszt Új");
   const freshOnly = await importRequest("plan", freshOnlyFixture);
   assert.equal(freshOnly.status, 200, "a csak új ID-kat tartalmazó CSV előnézete sikeres");
-  assert.match(await freshOnly.text(), /CSV-ből hiányzó, érintetlenül maradó korábbi ID-k: 1/);
+  assert.match(await freshOnly.text(), /1 új jelentkezést találtunk/);
   assert.equal(masterState.length, 2, "a részleges CSV előnézete sem írhat");
 
   const repeated = await importRequest("plan", fixture);
   assert.equal(repeated.status, 200);
-  assert.match(await repeated.text(), /Új, append-only rekord: 0/);
+  assert.match(await repeated.text(), /Nincs új jelentkezés ebben a fájlban/);
   assert.equal(masterState.length, 2, "ismételt teljes import nem írhat");
 
   const changed = await importRequest("plan", fixture.replace("1111 Budapest, Teszt utca 1.", "2222 Budapest, Módosított utca 2."));
   assert.equal(changed.status, 200, "a létező ID eltérő adatával is csak kihagyás történik");
-  assert.match(await changed.text(), /Kihagyott, már létező ID a CSV-ben: 1/);
+  assert.match(await changed.text(), /1 jelentkezés már szerepel a táblázatban/);
   partialFilter = true;
   const filtered = await importRequest("plan", fixture);
   assert.equal(filtered.status, 400);
-  assert.match(await filtered.text(), /részleges/i);
+  assert.match(await filtered.text(), /szűrés vagy rendezés/i);
   partialFilter = false;
 
   const implicitDrafts = await worker.fetch(new Request("https://example.test/emails/drafts/test-email-token", {

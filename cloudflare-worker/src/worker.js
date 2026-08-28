@@ -181,7 +181,7 @@ async function handleImport(request, env, token) {
     const form = await request.formData();
     const requestedMode = text(form.get("mode")).toLowerCase() || "plan";
     if (!["plan", "execute", "drafts"].includes(requestedMode)) {
-      return html(importPage("Érvénytelen importmód.", 400), 400);
+      return html(importPage("Ez a művelet már nem érvényes. Nyisd meg újra az importoldalt."), 400);
     }
     if (requestedMode === "drafts") {
       if (recoveryMaintenanceEnabled(env)) return maintenanceHtmlResponse();
@@ -194,7 +194,7 @@ async function handleImport(request, env, token) {
 
     const file = form.get("file");
     if (!file || typeof file.text !== "function") {
-      return html(importPage("Nem található CSV fájl.", 400), 400);
+      return html(importPage("Válassz ki egy CSV-fájlt."), 400);
     }
     const csvText = await file.text();
     const parsed = parseCsv(csvText);
@@ -211,7 +211,7 @@ async function handleImport(request, env, token) {
     if (requestedMode === "plan") return html(importPlanPage(plan, registrations.length));
     if (recoveryMaintenanceEnabled(env)) return maintenanceHtmlResponse();
     if (!safeEqual(text(form.get("plan_hash")), plan.plan_hash)) {
-      return html(importPage("Az importterv hash-e nem egyezik. Készíts új előnézetet ugyanazzal a CSV-vel.", 409), 409);
+      return html(importPage("Közben megváltoztak az adatok. Ellenőrizd újra a fájlt."), 409);
     }
     const backup = await resolveImportBackupForExecution(request, env, accessToken, pipeline, snapshot, form);
 
@@ -225,7 +225,7 @@ async function handleImport(request, env, token) {
       emailRows: executionSnapshot.emailRows,
     });
     if (!safeEqual(plan.plan_hash, executionPlan.plan_hash)) {
-      return html(importPage("A Sheet az előnézet óta megváltozott. Készíts új importtervet.", 409), 409);
+      return html(importPage("Közben megváltoztak az adatok. Ellenőrizd újra a fájlt."), 409);
     }
     const result = await appendOnlyMasterRegistrations(
       accessToken,
@@ -248,7 +248,7 @@ async function handleImport(request, env, token) {
     return html(importResultPage(result, registrations.length, executionPlan, backup, draftGrant));
   } catch (error) {
     console.error("CSV import failed", error);
-    return html(importPage(error.message || "Az import nem sikerült.", 400), 400);
+    return html(importPage(importErrorMessage(error)), 400);
   }
 }
 
@@ -447,7 +447,7 @@ function maintenanceResponse() {
 }
 
 function maintenanceHtmlResponse() {
-  return html(importPage("A helyreállítás karbantartási módja aktív; az importterv elkészíthető, de éles írás nem engedélyezett.", 503), 503);
+  return html(importPage("Az import most rövid ideig szünetel. Próbáld meg később."), 503);
 }
 
 function disabledEndpoint(message) {
@@ -2783,28 +2783,187 @@ function safeEqual(left, right) { if (left.length !== right.length) return false
 function json(payload, status = 200) { return new Response(JSON.stringify(payload), { status, headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" } }); }
 function html(body, status = 200) { return new Response(body, { status, headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" } }); }
 
-function importPage(message = "", status = 200) {
-  return `<!doctype html><meta charset="utf-8"><title>Gravity Forms import</title><style>body{font:16px system-ui;max-width:720px;margin:48px auto;padding:0 20px}main{border:1px solid #ddd;border-radius:12px;padding:24px}input,button{font:inherit;margin-top:12px}button{padding:10px 16px;cursor:pointer}.error{color:#a00;white-space:pre-wrap}.note{color:#435}</style><main><h1>Gravity Forms import</h1><p>Először csak ellenőrizhető terv készül. A rendszer kizárólag új ID-kat írhat a főlap végére; e-mailt nem készít és nem küld.</p><p>Tölthetsz fel teljes Gravity Forms exportot vagy csak a friss jelentkezéseket tartalmazó, azonos fejlécű CSV-t. A már létező ID-k mindig kimaradnak az importból.</p><p><a href="https://kult2.hu/wp-admin/admin.php?page=gf_export" target="_blank" rel="noopener noreferrer">Gravity Forms export</a></p>${message ? `<p class="error">${escapeHtml(message)}</p>` : ""}<form method="post" enctype="multipart/form-data"><input type="hidden" name="mode" value="plan"><input type="file" name="file" accept=".csv,text/csv" required><br><button>Előnézet készítése</button></form></main>`;
+function importPage(message = "") {
+  const content = `<main>
+    <h1>Új jelentkezések hozzáadása</h1>
+    <p>Válaszd ki a Gravity Formsból letöltött CSV-fájlt. Előbb megmutatjuk, hány új jelentkezést találtunk.</p>
+    <p><a href="https://kult2.hu/wp-admin/admin.php?page=gf_export" target="_blank" rel="noopener noreferrer">CSV letöltése a Gravity Formsból</a></p>
+    ${message ? `<p class="error" role="alert">${escapeHtml(message)}</p>` : ""}
+    <form method="post" enctype="multipart/form-data" data-import-form>
+      <input type="hidden" name="mode" value="plan">
+      <label class="file-label">CSV-fájl<input type="file" name="file" accept=".csv,text/csv"></label>
+      <button>Fájl ellenőrzése</button>
+    </form>
+    <p class="note">Az ellenőrzés még nem módosít semmit és nem küld e-mailt.</p>
+  </main>`;
+  return importPageShell("Jelentkezések importálása", content);
 }
 
 function importPlanPage(plan, count) {
   const newIds = plan.new_entry_ids;
   const oldIds = plan.skipped_existing_master;
-  const absentExisting = plan.existing_master_not_in_csv;
-  const recoveredIds = plan.recovered_from_email_history;
-  return `<!doctype html><meta charset="utf-8"><title>Import előnézet</title><style>body{font:16px system-ui;max-width:720px;margin:48px auto;padding:0 20px}main{border:1px solid #ddd;border-radius:12px;padding:24px}input,button{font:inherit;margin-top:12px}button{padding:10px 16px;cursor:pointer}code{word-break:break-all}.warn{color:#875b00}</style><main><h1>Import előnézet</h1><p>${count} CSV-sor ellenőrizve. Ez a terv még semmit nem írt a Sheetbe.</p><ul><li>Új, append-only rekord: ${newIds.length}</li><li>Kihagyott, már létező ID a CSV-ben: ${oldIds.length}</li><li>CSV-ből hiányzó, érintetlenül maradó korábbi ID-k: ${absentExisting.length}</li><li>E-mail-történetből helyreállítandó rekord: ${recoveredIds.length}</li><li>Első új sor: ${plan.append_start_row}</li></ul><details><summary>Új ID-k (${newIds.length})</summary><p>${escapeHtml(newIds.join(", ") || "nincs")}</p></details><details><summary>Kihagyott, már létező ID-k (${oldIds.length})</summary><p>${escapeHtml(oldIds.join(", ") || "nincs")}</p></details><details><summary>A CSV-ből hiányzó korábbi ID-k (${absentExisting.length})</summary><p>${escapeHtml(absentExisting.join(", ") || "nincs")}</p></details><details><summary>E-mail-történetből helyreállítandó ID-k (${recoveredIds.length})</summary><p>${escapeHtml(recoveredIds.join(", ") || "nincs")}</p></details><p><small>Terv hash: <code>${escapeHtml(plan.plan_hash)}</code></small></p><p class="warn">Az éles futtatás ugyanazt a CSV-t és változatlan Sheet-pillanatképet követeli meg. A Worker a konfigurált, megbízható Drive-forrásból automatikusan választ friss, ellenőrzött backupot; nincs kézi backup-ID mező.</p><form method="post" enctype="multipart/form-data"><input type="hidden" name="mode" value="execute"><input type="hidden" name="plan_hash" value="${escapeHtml(plan.plan_hash)}"><input type="file" name="file" accept=".csv,text/csv" required><br><button>Jóváhagyott terv végrehajtása</button></form></main>`;
+  const newLabel = newIds.length === 1 ? "1 új jelentkezést" : `${newIds.length} új jelentkezést`;
+  const newButtonLabel = newIds.length === 1 ? "1 új jelentkezés hozzáadása" : `${newIds.length} új jelentkezés hozzáadása`;
+  const oldLabel = oldIds.length === 1 ? "1 jelentkezés" : `${oldIds.length} jelentkezés`;
+  const action = newIds.length
+    ? `<form method="post" enctype="multipart/form-data" data-import-form data-reuses-file>
+        <input type="hidden" name="mode" value="execute">
+        <input type="hidden" name="plan_hash" value="${escapeHtml(plan.plan_hash)}">
+        <button>${newButtonLabel}</button>
+      </form>`
+    : "";
+  const details = newIds.length
+    ? `<details><summary>Az új jelentkezések azonosítói</summary><p>${escapeHtml(newIds.join(", "))}</p></details>`
+    : "";
+  const result = newIds.length
+    ? `<p class="result"><strong>${newLabel} találtunk.</strong></p>`
+    : '<p class="result"><strong>Nincs új jelentkezés ebben a fájlban.</strong></p>';
+  const skipped = oldIds.length
+    ? `<p>${oldLabel} már szerepel a táblázatban, ezért kihagyjuk.</p>`
+    : "";
+  const content = `<main>
+    <h1>A fájl rendben van</h1>
+    <p>${count} jelentkezést ellenőriztünk.</p>
+    ${result}
+    ${skipped}
+    ${details}
+    ${action}
+    <p><a href="">Másik fájl választása</a></p>
+  </main>`;
+  return importPageShell("Import ellenőrzése", content);
 }
 
 function importResultPage(result, count, plan, backup, draftGrant) {
   const written = result.results.length;
   const draftAction = draftGrant
-    ? `<form method="post"><input type="hidden" name="mode" value="drafts"><input type="hidden" name="draft_grant" value="${escapeHtml(draftGrant)}"><button>Piszkozatok elkészítése az ${plan.new_entry_ids.length} új ID-hoz</button></form><p><small>A lépés csak piszkozatot hoz létre; jóváhagyást nem kapcsol be és Brevo-levelet nem küld.</small></p>`
-    : "<p>Nincs új ID, ezért nincs elkészítendő e-mail-piszkozat.</p>";
-  return `<!doctype html><meta charset="utf-8"><title>Import kész</title><style>body{font:16px system-ui;max-width:720px;margin:48px auto;padding:0 20px}main{border:1px solid #ddd;border-radius:12px;padding:24px}code{word-break:break-all}button{font:inherit;padding:10px 16px;cursor:pointer;margin-top:12px}</style><main><h1>Import elkészült</h1><p>${count} CSV-sor ellenőrizve.</p><ul><li>A főlap végére írt új rekordok: ${written}</li><li>Régi rekord megváltoztatva: 0</li><li>E-mail-piszkozat vagy Brevo-küldés: 0</li></ul><p>Minden korábbi rekord visszaolvasva, változatlanul maradt.</p>${draftAction}<p><small>Végrehajtott terv: <code>${escapeHtml(plan.plan_hash)}</code><br>Automatikusan kiválasztott, igazolt Drive-backup: <code>${escapeHtml(backup.id)}</code></small></p></main>`;
+    ? `<form method="post"><input type="hidden" name="mode" value="drafts"><input type="hidden" name="draft_grant" value="${escapeHtml(draftGrant)}"><button>E-mail-piszkozatok elkészítése (${plan.new_entry_ids.length})</button></form><p class="note">Csak piszkozat készül. Küldéshez később külön jóváhagyás kell.</p>`
+    : "";
+  const writtenLabel = written === 1 ? "1 új jelentkezés bekerült." : `${written} új jelentkezés bekerült.`;
+  const content = `<main>
+    <h1>Kész</h1>
+    <p class="result"><strong>${writtenLabel}</strong></p>
+    <p>Korábbi jelentkezéseket nem változtattunk meg, és e-mailt sem küldtünk.</p>
+    ${draftAction}
+  </main>`;
+  return importPageShell("Import kész", content);
 }
 
 function importDraftResultPage(result) {
-  return `<!doctype html><meta charset="utf-8"><title>E-mail-piszkozatok elkészültek</title><style>body{font:16px system-ui;max-width:720px;margin:48px auto;padding:0 20px}main{border:1px solid #ddd;border-radius:12px;padding:24px}</style><main><h1>E-mail-piszkozatok elkészültek</h1><ul><li>Feldolgozott új ID: ${result.processed}</li><li>Ellenőrzésre kész piszkozat: ${result.ready}</li><li>Kézi elbírálást igényel: ${result.manual}</li><li>Brevo-küldés: 0</li><li>Automatikus jóváhagyás: 0</li></ul><p>A küldés továbbra is csak külön, kézi jóváhagyással indulhat.</p></main>`;
+  const manual = result.manual
+    ? `<p>${result.manual} jelentkezést még kézzel át kell nézni.</p>`
+    : "";
+  const content = `<main>
+    <h1>A piszkozatok elkészültek</h1>
+    <p class="result"><strong>${result.ready} e-mail-piszkozat készen áll az ellenőrzésre.</strong></p>
+    ${manual}
+    <p>E-mailt nem küldtünk.</p>
+  </main>`;
+  return importPageShell("E-mail-piszkozatok elkészültek", content);
+}
+
+function importPageShell(title, content) {
+  return `<!doctype html>
+<html lang="hu">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>${escapeHtml(title)}</title>
+  <style>
+    :root{color-scheme:light;font:16px/1.5 system-ui,-apple-system,sans-serif;color:#172033;background:#f5f7fb}
+    body{max-width:680px;margin:48px auto;padding:0 20px}
+    main{background:#fff;border:1px solid #dce1ea;border-radius:16px;padding:28px;box-shadow:0 8px 30px rgba(32,45,72,.08)}
+    h1{font-size:1.65rem;line-height:1.2;margin:0 0 16px}
+    p{margin:12px 0}a{color:#3157a4}button,input{font:inherit}
+    button{display:inline-block;margin-top:18px;padding:11px 18px;border:0;border-radius:9px;background:#3157a4;color:#fff;font-weight:650;cursor:pointer}
+    button:disabled{opacity:.65;cursor:wait}.file-label{display:block;margin-top:20px;font-weight:650}
+    input[type=file]{display:block;max-width:100%;margin-top:8px;font-weight:400}
+    .error{padding:12px 14px;border-radius:9px;background:#fff1f0;color:#8b1e19}.note{color:#5a6478;font-size:.92rem}
+    .result{font-size:1.15rem}.client-error{margin-top:16px}details{margin:16px 0;color:#4c566a}details p{overflow-wrap:anywhere}
+  </style>
+</head>
+<body>
+${content}
+${importClientScript()}
+</body>
+</html>`;
+}
+
+function importClientScript() {
+  return `<script>
+(() => {
+  let selectedFile = null;
+
+  function showError(message) {
+    const main = document.querySelector("main");
+    let error = main.querySelector(".client-error");
+    if (!error) {
+      error = document.createElement("p");
+      error.className = "error client-error";
+      error.setAttribute("role", "alert");
+      main.append(error);
+    }
+    error.textContent = message;
+  }
+
+  function bindImportForm() {
+    const form = document.querySelector("form[data-import-form]");
+    if (!form) return;
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const input = form.querySelector('input[type="file"][name="file"]');
+      if (input && input.files && input.files[0]) selectedFile = input.files[0];
+      if (!selectedFile) {
+        showError(form.hasAttribute("data-reuses-file")
+          ? "A fájl már nem érhető el. Válassz ki újra egy CSV-fájlt."
+          : "Válassz ki egy CSV-fájlt.");
+        return;
+      }
+
+      const button = form.querySelector("button");
+      const originalLabel = button ? button.textContent : "";
+      if (button) {
+        button.disabled = true;
+        button.textContent = "Dolgozunk…";
+      }
+      try {
+        const data = new FormData(form);
+        data.set("file", selectedFile, selectedFile.name);
+        const response = await fetch(form.action || location.href, { method: "POST", body: data });
+        const source = await response.text();
+        const next = new DOMParser().parseFromString(source, "text/html");
+        const nextMain = next.querySelector("main");
+        if (!nextMain) throw new Error("invalid_response");
+        document.title = next.title || document.title;
+        document.querySelector("main").replaceWith(nextMain);
+        bindImportForm();
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      } catch (error) {
+        showError("Nem sikerült kapcsolódni. A fájl nálad maradt; próbáld meg újra.");
+      } finally {
+        if (button) {
+          button.disabled = false;
+          button.textContent = originalLabel;
+        }
+      }
+    });
+  }
+
+  bindImportForm();
+})();
+</script>`;
+}
+
+function importErrorMessage(error) {
+  const message = text(error?.message);
+  if (!message) return "Az import nem sikerült. Semmi nem változott; próbáld meg újra.";
+  if (/CSV|Gravity Forms ID|növendéknév/i.test(message)) return message;
+  if (/részleges|rendezést tartalmaz/i.test(message)) {
+    return "A táblázaton most olyan szűrés vagy rendezés van, amely mellett nem tudunk importálni. Kapcsold ki, majd próbáld meg újra.";
+  }
+  if (/backup|IMPORT_BACKUP|Google API|Google token|service account/i.test(message)) {
+    return "Most nem tudjuk biztonságosan elindítani az importot. Semmi nem változott; próbáld meg néhány perc múlva.";
+  }
+  return "Az import nem sikerült. Semmi nem változott; próbáld meg újra. Ha ismét ezt látod, szólj a rendszergazdának.";
 }
 
 function escapeHtml(value) { return String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char])); }
