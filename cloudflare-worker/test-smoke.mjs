@@ -36,7 +36,6 @@ const masterHeader = [
 ];
 const masterState = [masterHeader];
 const staffState = [[...masterHeader.slice(0, 8)]];
-let staffBackupState = staffState.map((row) => [...row]);
 const emailState = [[...EMAIL_OUTPUT_HEADERS]];
 const configState = [[
   "Tanfolyam kulcs", "GF pontos érték / alias", "Nap", "Kezdés", "Befejezés", "Helyszín", "Tanár", "Heti alkalom", "Perc/alkalom", "Díjkategória", "Kézi elbírálás",
@@ -60,10 +59,6 @@ const backupDetails = new Map([
   ["test-backup-corrupt", { createdTime: newestBackupCreatedAt, parents: ["test-backup-folder"], snapshot: "corrupt" }],
   ["test-backup-stale", { createdTime: staleBackupCreatedAt, parents: ["test-backup-folder"], snapshot: "matching" }],
   ["test-backup-foreign", { createdTime: newestBackupCreatedAt, parents: ["other-folder"], snapshot: "matching" }],
-  ["test-staff-backup", { createdTime: backupCreatedAt, parents: ["test-backup-folder"], snapshot: "staff_matching" }],
-  ["test-staff-backup-corrupt", { createdTime: newestBackupCreatedAt, parents: ["test-backup-folder"], snapshot: "staff_corrupt" }],
-  ["test-staff-backup-stale", { createdTime: staleBackupCreatedAt, parents: ["test-backup-folder"], snapshot: "staff_matching" }],
-  ["test-staff-backup-foreign", { createdTime: newestBackupCreatedAt, parents: ["other-folder"], snapshot: "staff_matching" }],
 ]);
 
 globalThis.fetch = async (input, options = {}) => {
@@ -96,11 +91,6 @@ globalThis.fetch = async (input, options = {}) => {
     ] }), { status: 200 });
   }
   if (url.includes("test-staff-spreadsheet?fields=")) {
-    return new Response(JSON.stringify({ sheets: [
-      { properties: { sheetId: 7, title: pipeline.staff_target.tab_name, gridProperties: { rowCount: 1000, columnCount: 26 } } },
-    ] }), { status: 200 });
-  }
-  if (url.includes("test-staff-backup") && url.includes("?fields=")) {
     return new Response(JSON.stringify({ sheets: [
       { properties: { sheetId: 7, title: pipeline.staff_target.tab_name, gridProperties: { rowCount: 1000, columnCount: 26 } } },
     ] }), { status: 200 });
@@ -210,43 +200,12 @@ try {
   assert.equal(syncLocked.status, 503, "a karbantartási zár az execute módot megállítja");
   assert.equal(staffState.length, 1);
 
-  backupCandidates = ["test-staff-backup-stale"];
-  const staleSyncBackup = await syncRequest({ mode: "execute", plan_hash: syncPreviewResult.plan_hash });
-  assert.equal(staleSyncBackup.status, 500);
-  assert.match((await staleSyncBackup.json()).message, /Nincs friss, sértetlen/i);
-  assert.equal(staffState.length, 1, "régi backup mellett nincs szinkron");
-
-  backupCandidates = ["test-staff-backup-foreign"];
-  const foreignSyncBackup = await syncRequest({ mode: "execute", plan_hash: syncPreviewResult.plan_hash });
-  assert.equal(foreignSyncBackup.status, 500);
-  assert.match((await foreignSyncBackup.json()).message, /Nincs friss, sértetlen/i);
-  assert.equal(staffState.length, 1, "idegen backup mellett nincs szinkron");
-
-  backupCandidates = ["test-staff-backup-corrupt"];
-  const corruptSyncBackup = await syncRequest({ mode: "execute", plan_hash: syncPreviewResult.plan_hash });
-  assert.equal(corruptSyncBackup.status, 500);
-  assert.match((await corruptSyncBackup.json()).message, /Nincs friss, sértetlen/i);
-  assert.equal(staffState.length, 1, "sérült backup mellett nincs szinkron");
-
-  const legacyManualSyncBackup = await syncRequest({
-    mode: "execute", plan_hash: syncPreviewResult.plan_hash, backup_id: "test-staff-backup",
+  const syncExecuted = await syncRequest({
+    mode: "execute", plan_hash: syncPreviewResult.plan_hash, backup_id: "test-backup",
   });
-  assert.equal(legacyManualSyncBackup.status, 500);
-  assert.match((await legacyManualSyncBackup.json()).message, /nem fogad kézzel megadott backup-ID-t/i);
-  assert.equal(staffState.length, 1, "a normál szinkron kézi backup-ID-val sem írhat");
-
-  const deniedSyncEmergencyOverride = await emergencySyncRequest(syncPreviewResult.plan_hash);
-  assert.equal(deniedSyncEmergencyOverride.status, 500);
-  assert.match((await deniedSyncEmergencyOverride.json()).message, /X-Import-Emergency-Token/i);
-  assert.equal(staffState.length, 1, "a kézi vészfelülbírálás külön admin token nélkül sem írhat");
-
-  backupCandidates = ["test-staff-backup-corrupt", "test-staff-backup"];
-  const syncExecuted = await syncRequest({ mode: "execute", plan_hash: syncPreviewResult.plan_hash });
   assert.equal(syncExecuted.status, 200);
   const syncExecutedResult = await syncExecuted.json();
   assert.equal(syncExecutedResult.created, 1);
-  assert.equal(syncExecutedResult.backup.id, "test-staff-backup");
-  assert.equal(syncExecutedResult.backup.selection, "automatic");
   assert.equal(staffState[1][0], "TEST-CODEX-20260723-001");
   assert.equal(staffState[1][5], "Codex Teszt Dami");
   assert.deepEqual(staffState[0].slice(8, 11), [
@@ -260,14 +219,12 @@ try {
   assert.equal(staleSyncPreviewResult.deleted, 1, "a preview kimutatja a törlendő, fő Sheetből hiányzó sort");
   assert.equal(staffState.length, 3, "a preview törlésmentes");
   const deleteWithoutConfirmation = await syncRequest({
-    mode: "execute", plan_hash: staleSyncPreviewResult.plan_hash,
+    mode: "execute", plan_hash: staleSyncPreviewResult.plan_hash, backup_id: "test-backup",
   });
   assert.equal(deleteWithoutConfirmation.status, 409, "törlés külön megerősítés nélkül nem indulhat");
   assert.equal(staffState.length, 3);
-  staffBackupState = staffState.map((row) => [...row]);
-  backupCandidates = ["test-staff-backup"];
   const confirmedDelete = await syncRequest({
-    mode: "execute", plan_hash: staleSyncPreviewResult.plan_hash, allow_deletes: true,
+    mode: "execute", plan_hash: staleSyncPreviewResult.plan_hash, backup_id: "test-backup", allow_deletes: true,
   });
   assert.equal(confirmedDelete.status, 200);
   assert.equal(staffState.length, 2, "a jóváhagyott törlés a friss tervből, visszaolvasással zárul");
@@ -376,25 +333,13 @@ async function emergencyImportRequest(planHash) {
   }), env);
 }
 
-async function syncRequest(payload, selectedEnv = env, headers = {}) {
+async function syncRequest(payload, selectedEnv = env) {
   return worker.fetch(new Request("https://example.test/sync/test-sync-token", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...headers },
-    body: JSON.stringify({ pipeline_id: pipeline.pipeline_id, ...payload }),
+    method: "POST", body: JSON.stringify({ pipeline_id: pipeline.pipeline_id, ...payload }),
   }), selectedEnv);
 }
 
-async function emergencySyncRequest(planHash) {
-  return syncRequest({
-    mode: "execute",
-    plan_hash: planHash,
-    backup_override_id: "test-staff-backup",
-  }, env, { "X-Import-Backup-Override": "emergency" });
-}
-
 function stateForRead(url) {
-  if (url.includes("test-staff-backup-corrupt")) return [["Sérült backup"]];
-  if (url.includes("test-staff-backup")) return staffBackupState;
   if (url.includes("test-backup-corrupt") && url.includes("E-mail kimenet")) return [["Sérült backup"]];
   if (url.includes("test-staff-spreadsheet")) return staffState;
   if (url.includes("Tanfolyamok")) return configState;

@@ -70,7 +70,7 @@ function syncStaffSheet() {
   const preview = callSyncEndpoint_({ mode: 'preview' });
   const confirmation = ui.alert(
     'Munkatársi Sheet-szinkron végrehajtása',
-    staffSyncSummary_(preview) + '\n\nA Worker azonos tervhash-t, a konfigurált megbízható Drive-forrásból automatikusan kiválasztott friss backupot és visszaolvasást követel. Folytatod?',
+    staffSyncSummary_(preview) + '\n\nA Worker azonos tervhash-t, friss Drive-backupot és visszaolvasást követel. Folytatod?',
     ui.ButtonSet.YES_NO,
   );
   if (confirmation !== ui.Button.YES) return;
@@ -84,9 +84,19 @@ function syncStaffSheet() {
     if (deleteConfirmation !== ui.Button.YES) return;
   }
 
+  const backupPrompt = ui.prompt(
+    'Friss Drive-backup azonosító',
+    'Add meg a közvetlenül a munkatársi Sheet-ről készített, elérhető Google Sheets Drive-másolat azonosítóját.',
+    ui.ButtonSet.OK_CANCEL,
+  );
+  if (backupPrompt.getSelectedButton() !== ui.Button.OK) return;
+  const backupId = backupPrompt.getResponseText().trim();
+  if (!backupId) return ui.alert('A végrehajtáshoz kötelező a friss Drive-backup azonosítója.');
+
   const result = callSyncEndpoint_({
     mode: 'execute',
     plan_hash: preview.plan_hash,
+    backup_id: backupId,
     allow_deletes: Number(preview.deleted || 0) > 0,
   });
   showStaffSyncResult_('Munkatársi Sheet-szinkron elkészült', result);
