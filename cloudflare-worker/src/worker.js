@@ -527,10 +527,12 @@ async function handleSync(request, env, token) {
         ...staffSyncPlanSummary(plan),
       }, 409);
     }
-    const backup = await verifyImportBackup(
+    const backup = await resolveStaffSyncBackupForExecution(
+      request,
+      env,
       accessToken,
-      pipeline.staff_target.spreadsheet_id,
-      text(payload.backup_id),
+      pipeline,
+      payload,
     );
     // A preview nem jogosít fel vak írásra: közvetlenül a végrehajtás előtt
     // újraolvassuk mindkét Sheetet, és csak ugyanazt a tervet fogadjuk el.
@@ -1207,6 +1209,17 @@ async function resolveAutomaticImportBackup(accessToken, env, pipeline, snapshot
 }
 
 async function resolveEmergencyImportBackupOverride(request, env, accessToken, pipeline, snapshot, backupId) {
+  requireEmergencyBackupOverride(request, env);
+  const backup = await verifyImportBackup(accessToken, pipeline.spreadsheet_id, backupId);
+  return validateImportBackupForSnapshot(accessToken, pipeline, snapshot, backup, {
+    maxAgeMinutes: DEFAULT_IMPORT_BACKUP_MAX_AGE_MINUTES,
+  }, {
+    requireConfiguredFolder: false,
+    selection: "emergency_override",
+  });
+}
+
+function requireEmergencyBackupOverride(request, env) {
   if (text(request.headers.get("X-Import-Emergency-Token")) === "" || !env.IMPORT_EMERGENCY_ADMIN_TOKEN
       || !safeEqual(text(request.headers.get("X-Import-Emergency-Token")), env.IMPORT_EMERGENCY_ADMIN_TOKEN)) {
     throw new Error("A kézi backup-ID csak érvényes X-Import-Emergency-Token admin felülbírálással használható.");
@@ -1214,8 +1227,60 @@ async function resolveEmergencyImportBackupOverride(request, env, accessToken, p
   if (text(request.headers.get("X-Import-Backup-Override")) !== "emergency") {
     throw new Error("A kézi backup-ID-hez X-Import-Backup-Override: emergency jelölés szükséges.");
   }
-  const backup = await verifyImportBackup(accessToken, pipeline.spreadsheet_id, backupId);
-  return validateImportBackupForSnapshot(accessToken, pipeline, snapshot, backup, {
+}
+
+async function resolveStaffSyncBackupForExecution(request, env, accessToken, pipeline, payload) {
+  const legacyBackupId = text(payload.backup_id);
+  const overrideBackupId = text(payload.backup_override_id);
+  if (legacyBackupId) {
+    throw new Error("A normál munkatársi Sheet-szinkron nem fogad kézzel megadott backup-ID-t. A Worker a konfigurált Drive-forrásból választ mentést.");
+  }
+
+  const staffRows = await readSheetRows(
+    accessToken,
+    pipeline.staff_target.spreadsheet_id,
+    pipeline.staff_target.tab_name,
+    "A:ZZ",
+  );
+  if (overrideBackupId) {
+    return resolveEmergencyStaffSyncBackupOverride(
+      request,
+      env,
+      accessToken,
+      pipeline,
+      staffRows,
+      overrideBackupId,
+    );
+  }
+  return resolveAutomaticStaffSyncBackup(accessToken, env, pipeline, staffRows);
+}
+
+async function resolveAutomaticStaffSyncBackup(accessToken, env, pipeline, staffRows) {
+  const source = importBackupSource(env, pipeline);
+  await verifyImportBackupFolder(accessToken, source.folderId);
+  const candidates = await listImportBackupCandidates(accessToken, source.folderId);
+  for (const candidate of candidates) {
+    try {
+      const backup = await verifyImportBackup(accessToken, pipeline.staff_target.spreadsheet_id, candidate.id);
+      return await validateStaffSyncBackupForSnapshot(accessToken, pipeline, staffRows, backup, source, {
+        requireConfiguredFolder: true,
+        selection: "automatic",
+      });
+    } catch (error) {
+      console.warn("Rejected automatic staff sync backup", JSON.stringify({
+        pipeline_id: pipeline.pipeline_id,
+        backup_id: text(candidate.id),
+        reason: error.message || "ismeretlen",
+      }));
+    }
+  }
+  throw new Error("Nincs friss, sértetlen és a munkatársi Sheet jelenlegi állapotával egyező Drive-backup a konfigurált forrásban. A szinkron nem indult el.");
+}
+
+async function resolveEmergencyStaffSyncBackupOverride(request, env, accessToken, pipeline, staffRows, backupId) {
+  requireEmergencyBackupOverride(request, env);
+  const backup = await verifyImportBackup(accessToken, pipeline.staff_target.spreadsheet_id, backupId);
+  return validateStaffSyncBackupForSnapshot(accessToken, pipeline, staffRows, backup, {
     maxAgeMinutes: DEFAULT_IMPORT_BACKUP_MAX_AGE_MINUTES,
   }, {
     requireConfiguredFolder: false,
@@ -1259,6 +1324,28 @@ async function validateImportBackupForSnapshot(accessToken, pipeline, snapshot, 
   ]);
   if (!safeEqual(expectedMasterHash, backupMasterHash) || !safeEqual(expectedEmailHash, backupEmailHash)) {
     throw new Error("A Drive-backup tartalma nem egyezik a jelenlegi production Sheet-pillanatképpel.");
+  }
+  return {
+    id: backup.id,
+    created_at: backup.created_at,
+    selection: options.selection,
+    source_folder_id: options.requireConfiguredFolder ? source.folderId : "",
+  };
+}
+
+async function validateStaffSyncBackupForSnapshot(accessToken, pipeline, staffRows, backup, source, options) {
+  const createdAtMillis = Date.parse(backup.created_at);
+  if (!Number.isFinite(createdAtMillis)) throw new Error("A Drive-backup létrehozási ideje érvénytelen.");
+  const ageMinutes = (Date.now() - createdAtMillis) / 60_000;
+  if (ageMinutes < -5 || ageMinutes > source.maxAgeMinutes) {
+    throw new Error(`A Drive-backup nem elég friss (${Math.max(0, Math.round(ageMinutes))} perc; legfeljebb ${source.maxAgeMinutes} perc lehet).`);
+  }
+  if (options.requireConfiguredFolder && !backup.parent_ids.includes(source.folderId)) {
+    throw new Error("A Drive-backup nem a konfigurált, megbízható backup-forrásból származik.");
+  }
+  const backupRows = await readSheetRows(accessToken, backup.id, pipeline.staff_target.tab_name, "A:ZZ");
+  if (!safeEqual(await semanticHash(staffRows), await semanticHash(backupRows))) {
+    throw new Error("A Drive-backup tartalma nem egyezik a munkatársi Sheet jelenlegi állapotával.");
   }
   return {
     id: backup.id,

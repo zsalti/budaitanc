@@ -117,10 +117,10 @@ kézi küldési bizonyíték mellett új levél nem készül.
 
 ### Automatikus Drive-backup kiválasztás
 
-A normál importoldal **nem kér backup-ID-t**. A Worker az
-`IMPORT_BACKUP_SOURCE_CONFIG_JSON` konfigurációból a pipeline-hoz tartozó
-Drive-mappát használja, és a legfrissebb alkalmas Google Sheets-másolatot
-választja. A konfiguráció mintája az
+A normál importoldal és a munkatársi Sheet-szinkron **nem kér backup-ID-t**.
+A Worker az `IMPORT_BACKUP_SOURCE_CONFIG_JSON` szerveroldali konfigurációból a
+pipeline-hoz tartozó kanonikus Drive-mappát használja, és a legfrissebb
+alkalmas Google Sheets-másolatot választja. A konfiguráció mintája az
 `import-backup-source.json.example` fájlban van.
 
 Egy jelölt backup csak akkor fogadható el, ha a megbízható mappában van, nem
@@ -130,8 +130,14 @@ tartalmi hash-e pontosan egyezik a végrehajtás előtti production pillanatkép
 Ha nincs ilyen fájl, az import biztonságosan megáll, nem kér kézi ID-t és nem
 ír Sheetbe.
 
-A kézi backup-ID nincs az UI-ban. Csak rendkívüli API-s admin felülbírálással
-használható, külön `IMPORT_EMERGENCY_ADMIN_TOKEN`,
+A munkatársi Sheet-szinkron ugyanezt a forrást használja, de kizárólag olyan
+friss másolatot fogad el, amelynek célfüle és teljes `A:ZZ` tartalma pontosan
+egyezik a szinkron előtti munkatársi Sheet állapotával. Ezért a kanonikus
+mappába a megfelelő Sheet friss másolatának kell bekerülnie; a kezelő ebből
+nem választ és nem másol fájlazonosítót.
+
+A kézi backup-ID nincs az UI-ban és a normál API-k sem fogadják el. Csak
+rendkívüli API-s admin felülbírálással használható, külön `IMPORT_EMERGENCY_ADMIN_TOKEN`,
 `X-Import-Emergency-Token` és `X-Import-Backup-Override: emergency` mellett;
 ekkor is lefut a frissesség-, séma- és tartalmi egyezésvizsgálat.
 
@@ -216,8 +222,10 @@ megjegyzés-oszlop érintetlen marad.
 
 A fő Sheethez kötött Apps Scriptben a `Budai Tánc → Munkatársi Sheet-szinkron
 előnézete` indít írásmentes ellenőrzést; a külön `… végrehajtása` menüpont
-előbb megmutatja az eredményt, majd a backup-ID-t és – szükség esetén – a
-törlést is emberrel hagyatja jóvá. A kód az
+előbb megmutatja az eredményt, majd – szükség esetén – a törlést emberrel
+hagyatja jóvá. A Worker a kanonikus Drive-forrásból automatikusan a legfrissebb
+friss, sértetlen és a munkatársi Sheet előtti állapotával pontosan egyező
+backupot választja; kézi azonosítót nem kér. A kód az
 `../apps-script/master-sheet-sync.gs` fájlban van. A token egyszeri megadása
 a Script Properties-ben történik. A bound Apps Scriptbe a kiadott forrást még
 külön be kell másolni/publikálni; a Worker deploy önmagában nem módosít Google
