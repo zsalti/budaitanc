@@ -1,0 +1,56 @@
+{
+  "generated_at": "2026-08-28T08:46:28Z",
+  "mode": "blank_only_payment_date_restore",
+  "production_write": true,
+  "target": {
+    "spreadsheet_id": "1hHlwBe_pK-Cdg7zoGFrd1adeTw8lYAMyZOCKZmzlcTs",
+    "sheet": " TAGOK I FÉLÉV",
+    "column": "K",
+    "header": "I. féléves tandíjfizetés dátuma"
+  },
+  "source": {
+    "spreadsheet_id": "1Tusi8FGqRPfRzB0WuxNz3LfTWrZxo05XswxIiZw-UzY",
+    "sheet": "TAGOK 2026-27",
+    "matching_key": "Közlemény",
+    "nonempty_payment_dates": 26
+  },
+  "result": {
+    "restored_blank_cells": 24,
+    "preserved_current_nonempty_cells": 8,
+    "preserved_current_values_conflicting_with_source": 2,
+    "final_nonempty_payment_dates": 32,
+    "verified_no_other_k_column_changes": true,
+    "updated_ranges": [
+      "K32",
+      "K34",
+      "K39",
+      "K41",
+      "K45",
+      "K46",
+      "K52",
+      "K53",
+      "K56",
+      "K65",
+      "K66",
+      "K77",
+      "K82",
+      "K91",
+      "K99",
+      "K100",
+      "K107",
+      "K109",
+      "K111",
+      "K139",
+      "K142",
+      "K143",
+      "K148",
+      "K158"
+    ]
+  },
+  "root_cause": {
+    "summary": "A teljes fő Sheetet visszaíró incidens-helyreállítási folyamat csak teljes forrásrekord-egyezés esetén vitte át, egyébként kiürítette a kézzel kezelt pénzügyi mezőket.",
+    "missing_guard": "A production migráció és a staging-visszaállítás nem ellenőrizte, hogy csökken-e a kézzel kezelt mezők kitöltöttsége.",
+    "prevention": "Mindkét teljes-Sheet helyreállítás mostantól leáll, ha bármely kézzel kezelt pénzügyi vagy megjegyzés mező kitöltött darabszáma csökkenne."
+  },
+  "real_email_send": false
+}

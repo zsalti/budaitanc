@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config import load_config
 from google_sheets_sync import build_drive_service, build_service
+from scripts.manual_field_integrity import validate_manual_field_retention
 from scripts.rehearse_recovery_sheet import (
 EMAIL_APPROVED_COLUMN_INDEX,
     EMAIL_OUTPUT_TAB,
@@ -418,6 +419,9 @@ def main() -> int:
         production_before[EMAIL_OUTPUT_TAB],
     )
     restoration_source = {**staging_source, EMAIL_OUTPUT_TAB: restored_email_rows}
+    manual_field_retention = validate_manual_field_retention(
+        production_before["master"], restoration_source["master"]
+    )
     # Google Sheets typed checkboxes read back as TRUE/FALSE even when the
     # verified source contains Python-style True/False. Keep every other
     # value strict, but use the established canonical checkbox form here.
@@ -432,6 +436,7 @@ def main() -> int:
         "staging_content_hashes": staging_content_hashes,
         "historical_raw_email_output_hash": HISTORICAL_RAW_EMAIL_OUTPUT_HASH,
         "preserved_post_migration_send_evidence": preserved_send_evidence,
+        "manual_field_retention": manual_field_retention,
         "projected_restoration_hashes": restoration_hashes,
         "real_email_send": False,
         "production_write": False,

@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config import load_config
 from google_sheets_sync import build_service
+from scripts.manual_field_integrity import validate_manual_field_retention
 from scripts.rehearse_recovery_sheet import (
     EMAIL_OUTPUT_TAB,
     ensure_email_output_checkboxes,
@@ -371,6 +372,9 @@ def main() -> int:
         args.manifest,
         args.manifest_sha256,
     )
+    manual_field_retention = validate_manual_field_retention(
+        snapshots["master"], targets["master"]
+    )
     target_validation = validate_targets(targets)
     config = load_config(
         csv_path=None,
@@ -415,6 +419,7 @@ def main() -> int:
         "source_snapshot_stable": True,
         "source_snapshot_hashes": second_hashes,
         "target_validation": target_validation,
+        "manual_field_retention": manual_field_retention,
         "manifest_mode": manifest.get("mode", ""),
         "manifest_snapshot_mode": manifest.get("snapshot_mode", ""),
     }
