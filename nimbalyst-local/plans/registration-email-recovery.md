@@ -21,6 +21,20 @@ ID-listát; a piszkozat a sikeres import eredményoldaláról indítható.
 Ez átmeneti operatív kapu, **nem** a D1-célarchitektúra jóváhagyása. A
 célarchitektúráról szóló döntési tétel nyitva marad.
 
+### 2026-08-28-i backup-kapu pontosítása
+
+A normál CSV-import végrehajtásakor a kezelő **nem** ad meg Drive backup
+azonosítót. A Worker a pipeline-hoz konfigurált, megbízható Drive-mappából
+automatikusan választja a legfrissebb alkalmas Sheets-másolatot. A jelöltnek
+frissnek kell lennie, a konfigurált fő- és e-mail-lap sémáját kell adnia, és
+tartalmi hash szerint egyeznie kell az írás előtti production
+pillanatképpel. Hiány vagy eltérés esetén az import nem ír.
+
+A kézi backup-ID csak külön vész-admin API-felülbírálásként maradhat meg,
+normál UI-mezőként nem. A kanonikus mappa szerveroldali konfigurációban van;
+ha ott nincs friss, egyező mentés, azt egy külön backup-folyamatnak kell
+létrehoznia, nem az importkezelőnek kézzel bemondania.
+
 ## Döntés
 
 Először egy szűk, ellenőrizhető szolgáltatást állítunk vissza:

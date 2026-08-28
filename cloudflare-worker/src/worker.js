@@ -51,6 +51,7 @@ const STAFF_ADDITIONAL_SYNC_HEADERS = [
   "II. féléves tandíj befizetés dátuma",
   "Egyéb megjegyzés",
 ];
+const DEFAULT_IMPORT_BACKUP_MAX_AGE_MINUTES = 60;
 const inFlightSends = new Set();
 const inFlightBrevoEvents = new Map();
 
@@ -212,11 +213,7 @@ async function handleImport(request, env, token) {
     if (!safeEqual(text(form.get("plan_hash")), plan.plan_hash)) {
       return html(importPage("Az importterv hash-e nem egyezik. Készíts új előnézetet ugyanazzal a CSV-vel.", 409), 409);
     }
-    const backup = await verifyImportBackup(
-      accessToken,
-      pipeline.spreadsheet_id,
-      text(form.get("backup_id")),
-    );
+    const backup = await resolveImportBackupForExecution(request, env, accessToken, pipeline, snapshot, form);
 
     // A terv egy gyors, megelőző olvasás. Közvetlenül írás előtt még egyszer
     // teljesen újraépítjük; bármilyen köztes Sheet-változás megakasztja a futást.
@@ -1139,14 +1136,136 @@ async function appendOnlyMasterRegistrations(accessToken, pipeline, beforeRows, 
 }
 
 async function verifyImportBackup(accessToken, productionSpreadsheetId, backupId) {
-  if (!backupId) throw new Error("Az éles importhoz kötelező a frissen elkészített Drive-backup azonosítója.");
+  if (!backupId) throw new Error("Hiányzik a Drive-backup azonosítója.");
   if (backupId === productionSpreadsheetId) throw new Error("A backup nem lehet azonos a production Sheettel.");
-  const url = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(backupId)}?fields=id,name,mimeType,createdTime,trashed`;
+  const url = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(backupId)}?fields=${encodeURIComponent("id,name,mimeType,createdTime,trashed,parents")}&supportsAllDrives=true`;
   const backup = await googleFetch(url, accessToken);
   if (backup.trashed || backup.mimeType !== "application/vnd.google-apps.spreadsheet") {
     throw new Error("A megadott backup nem elérhető Google Sheets Drive-másolat.");
   }
-  return { id: text(backup.id), created_at: text(backup.createdTime) };
+  return {
+    id: text(backup.id),
+    created_at: text(backup.createdTime),
+    parent_ids: Array.isArray(backup.parents) ? backup.parents.map(text).filter(Boolean) : [],
+  };
+}
+
+function importBackupSource(env, pipeline) {
+  if (!env.IMPORT_BACKUP_SOURCE_CONFIG_JSON) {
+    throw new Error("Hiányzik az IMPORT_BACKUP_SOURCE_CONFIG_JSON. Normál importhoz nincs konfigurált, megbízható Drive backup-forrás.");
+  }
+  let parsed;
+  try { parsed = JSON.parse(env.IMPORT_BACKUP_SOURCE_CONFIG_JSON); }
+  catch { throw new Error("Az IMPORT_BACKUP_SOURCE_CONFIG_JSON nem érvényes JSON."); }
+  const sources = Array.isArray(parsed) ? parsed : parsed.sources;
+  if (!Array.isArray(sources)) {
+    throw new Error("Az IMPORT_BACKUP_SOURCE_CONFIG_JSON sources tömbje hiányzik.");
+  }
+  const source = sources.find((item) => text(item?.pipeline_id) === pipeline.pipeline_id);
+  if (!source || !text(source.folder_id)) {
+    throw new Error(`Nincs konfigurált Drive backup-forrás ehhez a pipeline-hoz: ${pipeline.pipeline_id}.`);
+  }
+  const maxAgeMinutes = Number(source.max_age_minutes ?? DEFAULT_IMPORT_BACKUP_MAX_AGE_MINUTES);
+  if (!Number.isFinite(maxAgeMinutes) || maxAgeMinutes < 1 || maxAgeMinutes > 24 * 60) {
+    throw new Error("A backup-forrás max_age_minutes értéke 1 és 1440 közötti egész perc legyen.");
+  }
+  return { folderId: text(source.folder_id), maxAgeMinutes };
+}
+
+async function resolveImportBackupForExecution(request, env, accessToken, pipeline, snapshot, form) {
+  const legacyBackupId = text(form.get("backup_id"));
+  const overrideBackupId = text(form.get("backup_override_id"));
+  if (legacyBackupId && !overrideBackupId) {
+    throw new Error("A normál import nem fogad kézzel megadott backup-ID-t. A Worker a konfigurált Drive-forrásból választ mentést.");
+  }
+  if (overrideBackupId) {
+    return resolveEmergencyImportBackupOverride(request, env, accessToken, pipeline, snapshot, overrideBackupId);
+  }
+  return resolveAutomaticImportBackup(accessToken, env, pipeline, snapshot);
+}
+
+async function resolveAutomaticImportBackup(accessToken, env, pipeline, snapshot) {
+  const source = importBackupSource(env, pipeline);
+  await verifyImportBackupFolder(accessToken, source.folderId);
+  const candidates = await listImportBackupCandidates(accessToken, source.folderId);
+  for (const candidate of candidates) {
+    try {
+      const backup = await verifyImportBackup(accessToken, pipeline.spreadsheet_id, candidate.id);
+      return await validateImportBackupForSnapshot(accessToken, pipeline, snapshot, backup, source, {
+        requireConfiguredFolder: true,
+        selection: "automatic",
+      });
+    } catch (error) {
+      console.warn("Rejected automatic import backup", JSON.stringify({
+        pipeline_id: pipeline.pipeline_id,
+        backup_id: text(candidate.id),
+        reason: error.message || "ismeretlen",
+      }));
+    }
+  }
+  throw new Error("Nincs friss, sértetlen és a production Sheettel egyező Drive-backup a konfigurált forrásban. Az import nem indult el.");
+}
+
+async function resolveEmergencyImportBackupOverride(request, env, accessToken, pipeline, snapshot, backupId) {
+  if (text(request.headers.get("X-Import-Emergency-Token")) === "" || !env.IMPORT_EMERGENCY_ADMIN_TOKEN
+      || !safeEqual(text(request.headers.get("X-Import-Emergency-Token")), env.IMPORT_EMERGENCY_ADMIN_TOKEN)) {
+    throw new Error("A kézi backup-ID csak érvényes X-Import-Emergency-Token admin felülbírálással használható.");
+  }
+  if (text(request.headers.get("X-Import-Backup-Override")) !== "emergency") {
+    throw new Error("A kézi backup-ID-hez X-Import-Backup-Override: emergency jelölés szükséges.");
+  }
+  const backup = await verifyImportBackup(accessToken, pipeline.spreadsheet_id, backupId);
+  return validateImportBackupForSnapshot(accessToken, pipeline, snapshot, backup, {
+    maxAgeMinutes: DEFAULT_IMPORT_BACKUP_MAX_AGE_MINUTES,
+  }, {
+    requireConfiguredFolder: false,
+    selection: "emergency_override",
+  });
+}
+
+async function verifyImportBackupFolder(accessToken, folderId) {
+  const url = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(folderId)}?fields=${encodeURIComponent("id,mimeType,trashed")}&supportsAllDrives=true`;
+  const folder = await googleFetch(url, accessToken);
+  if (folder.trashed || folder.mimeType !== "application/vnd.google-apps.folder") {
+    throw new Error("A konfigurált backup-forrás nem elérhető Google Drive-mappa.");
+  }
+}
+
+async function listImportBackupCandidates(accessToken, folderId) {
+  const query = `'${folderId}' in parents and trashed=false and mimeType='application/vnd.google-apps.spreadsheet'`;
+  const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&orderBy=createdTime desc&fields=${encodeURIComponent("files(id,createdTime,mimeType,trashed,parents)")}&pageSize=50&supportsAllDrives=true&includeItemsFromAllDrives=true`;
+  const result = await googleFetch(url, accessToken);
+  return (Array.isArray(result.files) ? result.files : [])
+    .sort((left, right) => Date.parse(text(right.createdTime)) - Date.parse(text(left.createdTime)));
+}
+
+async function validateImportBackupForSnapshot(accessToken, pipeline, snapshot, backup, source, options) {
+  const createdAtMillis = Date.parse(backup.created_at);
+  if (!Number.isFinite(createdAtMillis)) throw new Error("A Drive-backup létrehozási ideje érvénytelen.");
+  const ageMinutes = (Date.now() - createdAtMillis) / 60_000;
+  if (ageMinutes < -5 || ageMinutes > source.maxAgeMinutes) {
+    throw new Error(`A Drive-backup nem elég friss (${Math.max(0, Math.round(ageMinutes))} perc; legfeljebb ${source.maxAgeMinutes} perc lehet).`);
+  }
+  if (options.requireConfiguredFolder && !backup.parent_ids.includes(source.folderId)) {
+    throw new Error("A Drive-backup nem a konfigurált, megbízható backup-forrásból származik.");
+  }
+  const backupPipeline = { ...pipeline, spreadsheet_id: backup.id };
+  const backupSnapshot = await readImportSnapshot(accessToken, backupPipeline);
+  const [expectedMasterHash, expectedEmailHash, backupMasterHash, backupEmailHash] = await Promise.all([
+    semanticHash(snapshot.masterRows),
+    semanticHash(snapshot.emailRows),
+    semanticHash(backupSnapshot.masterRows),
+    semanticHash(backupSnapshot.emailRows),
+  ]);
+  if (!safeEqual(expectedMasterHash, backupMasterHash) || !safeEqual(expectedEmailHash, backupEmailHash)) {
+    throw new Error("A Drive-backup tartalma nem egyezik a jelenlegi production Sheet-pillanatképpel.");
+  }
+  return {
+    id: backup.id,
+    created_at: backup.created_at,
+    selection: options.selection,
+    source_folder_id: options.requireConfiguredFolder ? source.folderId : "",
+  };
 }
 
 async function verifyAppendOnlyImport(beforeRows, afterRows, plan) {
@@ -2673,7 +2792,7 @@ function importPlanPage(plan, count) {
   const oldIds = plan.skipped_existing_master;
   const absentExisting = plan.existing_master_not_in_csv;
   const recoveredIds = plan.recovered_from_email_history;
-  return `<!doctype html><meta charset="utf-8"><title>Import előnézet</title><style>body{font:16px system-ui;max-width:720px;margin:48px auto;padding:0 20px}main{border:1px solid #ddd;border-radius:12px;padding:24px}input,button{font:inherit;margin-top:12px}button{padding:10px 16px;cursor:pointer}code{word-break:break-all}.warn{color:#875b00}</style><main><h1>Import előnézet</h1><p>${count} CSV-sor ellenőrizve. Ez a terv még semmit nem írt a Sheetbe.</p><ul><li>Új, append-only rekord: ${newIds.length}</li><li>Kihagyott, már létező ID a CSV-ben: ${oldIds.length}</li><li>CSV-ből hiányzó, érintetlenül maradó korábbi ID-k: ${absentExisting.length}</li><li>E-mail-történetből helyreállítandó rekord: ${recoveredIds.length}</li><li>Első új sor: ${plan.append_start_row}</li></ul><details><summary>Új ID-k (${newIds.length})</summary><p>${escapeHtml(newIds.join(", ") || "nincs")}</p></details><details><summary>Kihagyott, már létező ID-k (${oldIds.length})</summary><p>${escapeHtml(oldIds.join(", ") || "nincs")}</p></details><details><summary>A CSV-ből hiányzó korábbi ID-k (${absentExisting.length})</summary><p>${escapeHtml(absentExisting.join(", ") || "nincs")}</p></details><details><summary>E-mail-történetből helyreállítandó ID-k (${recoveredIds.length})</summary><p>${escapeHtml(recoveredIds.join(", ") || "nincs")}</p></details><p><small>Terv hash: <code>${escapeHtml(plan.plan_hash)}</code></small></p><p class="warn">Az éles futtatás ugyanazt a CSV-t, változatlan Sheet-pillanatképet és egy frissen elkészített Drive-backupot követel meg.</p><form method="post" enctype="multipart/form-data"><input type="hidden" name="mode" value="execute"><input type="hidden" name="plan_hash" value="${escapeHtml(plan.plan_hash)}"><label>Friss Drive-backup azonosító<br><input name="backup_id" required></label><br><input type="file" name="file" accept=".csv,text/csv" required><br><button>Jóváhagyott terv végrehajtása</button></form></main>`;
+  return `<!doctype html><meta charset="utf-8"><title>Import előnézet</title><style>body{font:16px system-ui;max-width:720px;margin:48px auto;padding:0 20px}main{border:1px solid #ddd;border-radius:12px;padding:24px}input,button{font:inherit;margin-top:12px}button{padding:10px 16px;cursor:pointer}code{word-break:break-all}.warn{color:#875b00}</style><main><h1>Import előnézet</h1><p>${count} CSV-sor ellenőrizve. Ez a terv még semmit nem írt a Sheetbe.</p><ul><li>Új, append-only rekord: ${newIds.length}</li><li>Kihagyott, már létező ID a CSV-ben: ${oldIds.length}</li><li>CSV-ből hiányzó, érintetlenül maradó korábbi ID-k: ${absentExisting.length}</li><li>E-mail-történetből helyreállítandó rekord: ${recoveredIds.length}</li><li>Első új sor: ${plan.append_start_row}</li></ul><details><summary>Új ID-k (${newIds.length})</summary><p>${escapeHtml(newIds.join(", ") || "nincs")}</p></details><details><summary>Kihagyott, már létező ID-k (${oldIds.length})</summary><p>${escapeHtml(oldIds.join(", ") || "nincs")}</p></details><details><summary>A CSV-ből hiányzó korábbi ID-k (${absentExisting.length})</summary><p>${escapeHtml(absentExisting.join(", ") || "nincs")}</p></details><details><summary>E-mail-történetből helyreállítandó ID-k (${recoveredIds.length})</summary><p>${escapeHtml(recoveredIds.join(", ") || "nincs")}</p></details><p><small>Terv hash: <code>${escapeHtml(plan.plan_hash)}</code></small></p><p class="warn">Az éles futtatás ugyanazt a CSV-t és változatlan Sheet-pillanatképet követeli meg. A Worker a konfigurált, megbízható Drive-forrásból automatikusan választ friss, ellenőrzött backupot; nincs kézi backup-ID mező.</p><form method="post" enctype="multipart/form-data"><input type="hidden" name="mode" value="execute"><input type="hidden" name="plan_hash" value="${escapeHtml(plan.plan_hash)}"><input type="file" name="file" accept=".csv,text/csv" required><br><button>Jóváhagyott terv végrehajtása</button></form></main>`;
 }
 
 function importResultPage(result, count, plan, backup, draftGrant) {
@@ -2681,7 +2800,7 @@ function importResultPage(result, count, plan, backup, draftGrant) {
   const draftAction = draftGrant
     ? `<form method="post"><input type="hidden" name="mode" value="drafts"><input type="hidden" name="draft_grant" value="${escapeHtml(draftGrant)}"><button>Piszkozatok elkészítése az ${plan.new_entry_ids.length} új ID-hoz</button></form><p><small>A lépés csak piszkozatot hoz létre; jóváhagyást nem kapcsol be és Brevo-levelet nem küld.</small></p>`
     : "<p>Nincs új ID, ezért nincs elkészítendő e-mail-piszkozat.</p>";
-  return `<!doctype html><meta charset="utf-8"><title>Import kész</title><style>body{font:16px system-ui;max-width:720px;margin:48px auto;padding:0 20px}main{border:1px solid #ddd;border-radius:12px;padding:24px}code{word-break:break-all}button{font:inherit;padding:10px 16px;cursor:pointer;margin-top:12px}</style><main><h1>Import elkészült</h1><p>${count} CSV-sor ellenőrizve.</p><ul><li>A főlap végére írt új rekordok: ${written}</li><li>Régi rekord megváltoztatva: 0</li><li>E-mail-piszkozat vagy Brevo-küldés: 0</li></ul><p>Minden korábbi rekord visszaolvasva, változatlanul maradt.</p>${draftAction}<p><small>Végrehajtott terv: <code>${escapeHtml(plan.plan_hash)}</code><br>Igazolt Drive-backup: <code>${escapeHtml(backup.id)}</code></small></p></main>`;
+  return `<!doctype html><meta charset="utf-8"><title>Import kész</title><style>body{font:16px system-ui;max-width:720px;margin:48px auto;padding:0 20px}main{border:1px solid #ddd;border-radius:12px;padding:24px}code{word-break:break-all}button{font:inherit;padding:10px 16px;cursor:pointer;margin-top:12px}</style><main><h1>Import elkészült</h1><p>${count} CSV-sor ellenőrizve.</p><ul><li>A főlap végére írt új rekordok: ${written}</li><li>Régi rekord megváltoztatva: 0</li><li>E-mail-piszkozat vagy Brevo-küldés: 0</li></ul><p>Minden korábbi rekord visszaolvasva, változatlanul maradt.</p>${draftAction}<p><small>Végrehajtott terv: <code>${escapeHtml(plan.plan_hash)}</code><br>Automatikusan kiválasztott, igazolt Drive-backup: <code>${escapeHtml(backup.id)}</code></small></p></main>`;
 }
 
 function importDraftResultPage(result) {

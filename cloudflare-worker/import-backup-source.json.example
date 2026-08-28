@@ -1,0 +1,9 @@
+{
+  "sources": [
+    {
+      "pipeline_id": "tanctanfolyam_jelentkezes",
+      "folder_id": "replace_me",
+      "max_age_minutes": 60
+    }
+  ]
+}

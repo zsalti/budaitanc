@@ -1,0 +1,21 @@
+{
+  "released_at": "2026-08-28T10:08:41+02:00",
+  "mode": "production_worker_release",
+  "worker": "budaitancklub-registration-webhook",
+  "version_id": "5352b07b-7703-478d-961e-0a8ba2d625d5",
+  "healthcheck": {
+    "url": "https://budaitancklub-registration-webhook.zsolt-3bf.workers.dev/healthz",
+    "status": 200,
+    "body": { "status": "ok" }
+  },
+  "configuration": {
+    "automatic_backup_source_secret_present": true,
+    "normal_import_manual_backup_id_enabled": false,
+    "emergency_override_secret_present": false
+  },
+  "safety_result": {
+    "production_import_executed": false,
+    "production_sheet_written": false,
+    "reason": "No fresh content-identical backup is currently eligible in the configured trusted source."
+  }
+}

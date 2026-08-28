@@ -21,6 +21,10 @@ const env = {
   PIPELINES_CONFIG_JSON: JSON.stringify({ pipelines: [pipeline] }),
   EMAIL_ADMIN_TOKEN: "test-email-token",
   SYNC_ADMIN_TOKEN: "test-sync-token",
+  IMPORT_BACKUP_SOURCE_CONFIG_JSON: JSON.stringify({ sources: [{
+    pipeline_id: pipeline.pipeline_id, folder_id: "test-backup-folder", max_age_minutes: 60,
+  }] }),
+  IMPORT_EMERGENCY_ADMIN_TOKEN: "test-emergency-token",
   BREVO_API_KEY: "test-brevo-key",
   BREVO_SENDER_EMAIL: "sender@example.invalid",
   BREVO_WEBHOOK_SECRET: "test-brevo-webhook-secret",
@@ -46,13 +50,32 @@ for (const row of settingsState) if (String(row[0] || "").startsWith("TEMPLATE_"
 let partialFilter = false;
 const originalFetch = globalThis.fetch;
 const brevoRequests = [];
+const backupCreatedAt = new Date(Date.now() - 60_000).toISOString();
+const newestBackupCreatedAt = new Date().toISOString();
+const staleBackupCreatedAt = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+let backupCandidates = [];
+const backupDetails = new Map([
+  ["test-backup", { createdTime: backupCreatedAt, parents: ["test-backup-folder"], snapshot: "matching" }],
+  ["test-backup-corrupt", { createdTime: newestBackupCreatedAt, parents: ["test-backup-folder"], snapshot: "corrupt" }],
+  ["test-backup-stale", { createdTime: staleBackupCreatedAt, parents: ["test-backup-folder"], snapshot: "matching" }],
+  ["test-backup-foreign", { createdTime: newestBackupCreatedAt, parents: ["other-folder"], snapshot: "matching" }],
+]);
 
 globalThis.fetch = async (input, options = {}) => {
   const url = String(input);
   const decoded = decodeURIComponent(url);
   if (url === "https://oauth2.googleapis.com/token") return new Response(JSON.stringify({ access_token: "test-access-token" }), { status: 200 });
-  if (url.includes("https://www.googleapis.com/drive/v3/files/test-backup")) {
-    return new Response(JSON.stringify({ id: "test-backup", mimeType: "application/vnd.google-apps.spreadsheet", createdTime: "2026-08-26T19:23:56Z", trashed: false }), { status: 200 });
+  if (url.includes("https://www.googleapis.com/drive/v3/files?") && decoded.includes("'test-backup-folder' in parents")) {
+    return new Response(JSON.stringify({ files: backupCandidates.map((id) => ({ id, ...backupDetails.get(id) })) }), { status: 200 });
+  }
+  if (url.includes("https://www.googleapis.com/drive/v3/files/test-backup-folder?")) {
+    return new Response(JSON.stringify({ id: "test-backup-folder", mimeType: "application/vnd.google-apps.folder", trashed: false }), { status: 200 });
+  }
+  const backupMatch = url.match(/https:\/\/www\.googleapis\.com\/drive\/v3\/files\/([^?]+)/);
+  if (backupMatch && backupDetails.has(decodeURIComponent(backupMatch[1]))) {
+    const id = decodeURIComponent(backupMatch[1]);
+    const detail = backupDetails.get(id);
+    return new Response(JSON.stringify({ id, mimeType: "application/vnd.google-apps.spreadsheet", trashed: false, ...detail }), { status: 200 });
   }
   if (url === "https://api.brevo.com/v3/smtp/email") {
     brevoRequests.push(JSON.parse(options.body));
@@ -70,6 +93,12 @@ globalThis.fetch = async (input, options = {}) => {
   if (url.includes("test-staff-spreadsheet?fields=")) {
     return new Response(JSON.stringify({ sheets: [
       { properties: { sheetId: 7, title: pipeline.staff_target.tab_name, gridProperties: { rowCount: 1000, columnCount: 26 } } },
+    ] }), { status: 200 });
+  }
+  if (url.includes("test-backup") && url.includes("?fields=")) {
+    return new Response(JSON.stringify({ sheets: [
+      { properties: { sheetId: 1, title: pipeline.tab_name, gridProperties: { rowCount: 1000, columnCount: 46 } } },
+      { properties: { sheetId: 2, title: "E-mail kimenet", gridProperties: { rowCount: 1000, columnCount: 34 } } },
     ] }), { status: 200 });
   }
   if (url.includes("/values:batchUpdate")) {
@@ -106,6 +135,8 @@ try {
   assert.equal(planned.status, 200);
   const plannedHtml = await planned.text();
   assert.match(plannedHtml, /Import előnézet/);
+  assert.doesNotMatch(plannedHtml, /name="backup_id"/, "a normál import UI nem kérhet kézi backup-ID-t");
+  assert.match(plannedHtml, /automatikusan választ friss, ellenőrzött backupot/i);
   const planHash = plannedHtml.match(/name="plan_hash" value="([a-f0-9]{64})"/)?.[1];
   assert.ok(planHash);
   assert.equal(masterState.length, 1, "a dry run nem írhat");
@@ -115,13 +146,40 @@ try {
   assert.equal(locked.status, 503);
   assert.equal(masterState.length, 1);
 
-  const missingBackup = await importRequest("execute", fixture, planHash, env, "");
-  assert.equal(missingBackup.status, 400);
-  assert.match(await missingBackup.text(), /Drive-backup/i);
+  backupCandidates = ["test-backup-corrupt"];
+  const corruptBackup = await importRequest("execute", fixture, planHash);
+  assert.equal(corruptBackup.status, 400);
+  assert.match(await corruptBackup.text(), /Nincs friss, sértetlen/i);
+  assert.equal(masterState.length, 1, "sérült backup mellett nincs import");
+
+  backupCandidates = ["test-backup-stale"];
+  const staleBackup = await importRequest("execute", fixture, planHash);
+  assert.equal(staleBackup.status, 400);
+  assert.match(await staleBackup.text(), /Nincs friss, sértetlen/i);
+  assert.equal(masterState.length, 1, "régi backup mellett nincs import");
+
+  backupCandidates = ["test-backup-foreign"];
+  const foreignBackup = await importRequest("execute", fixture, planHash);
+  assert.equal(foreignBackup.status, 400);
+  assert.match(await foreignBackup.text(), /Nincs friss, sértetlen/i);
+  assert.equal(masterState.length, 1, "idegen mappából származó backup mellett nincs import");
+
+  const legacyManualBackup = await importRequest("execute", fixture, planHash, env, "test-backup");
+  assert.equal(legacyManualBackup.status, 400);
+  assert.match(await legacyManualBackup.text(), /nem fogad kézzel megadott backup-ID-t/i);
+  assert.equal(masterState.length, 1, "normál import kézi backup-ID-val sem írhat");
+
+  const deniedEmergencyOverride = await emergencyImportRequest(planHash);
+  assert.equal(deniedEmergencyOverride.status, 400);
+  assert.match(await deniedEmergencyOverride.text(), /X-Import-Emergency-Token/i);
+  assert.equal(masterState.length, 1, "a kézi vészfelülbírálás külön admin token nélkül sem írhat");
+
+  backupCandidates = ["test-backup-corrupt", "test-backup"];
   const executed = await importRequest("execute", fixture, planHash);
   assert.equal(executed.status, 200);
   const executedHtml = await executed.text();
   assert.match(executedHtml, /E-mail-piszkozat vagy Brevo-küldés: 0/);
+  assert.match(executedHtml, /Automatikusan kiválasztott, igazolt Drive-backup: <code>test-backup<\/code>/);
   const draftGrant = executedHtml.match(/name="draft_grant" value="([^"]+)"/)?.[1];
   assert.ok(draftGrant, "a frissen importált ID-khoz időkorlátos piszkozatjogosultság készül");
   assert.equal(masterState.length, 2);
@@ -246,11 +304,11 @@ try {
   globalThis.fetch = originalFetch;
 }
 
-async function importRequest(mode, csv, planHash = "", selectedEnv = env, backupId = "test-backup") {
+async function importRequest(mode, csv, planHash = "", selectedEnv = env, legacyBackupId = "") {
   const form = new FormData();
   form.append("mode", mode);
   if (planHash) form.append("plan_hash", planHash);
-  if (mode === "execute" && backupId) form.append("backup_id", backupId);
+  if (mode === "execute" && legacyBackupId) form.append("backup_id", legacyBackupId);
   form.append("file", new Blob([csv], { type: "text/csv" }), "gravity.csv");
   return worker.fetch(new Request("https://example.test/import/test-import-token", { method: "POST", body: form }), selectedEnv);
 }
@@ -262,6 +320,19 @@ async function importDraftRequest(draftGrant) {
   return worker.fetch(new Request("https://example.test/import/test-import-token", { method: "POST", body: form }), env);
 }
 
+async function emergencyImportRequest(planHash) {
+  const form = new FormData();
+  form.append("mode", "execute");
+  form.append("plan_hash", planHash);
+  form.append("backup_override_id", "test-backup");
+  form.append("file", new Blob([fixture], { type: "text/csv" }), "gravity.csv");
+  return worker.fetch(new Request("https://example.test/import/test-import-token", {
+    method: "POST",
+    headers: { "X-Import-Backup-Override": "emergency" },
+    body: form,
+  }), env);
+}
+
 async function syncRequest(payload, selectedEnv = env) {
   return worker.fetch(new Request("https://example.test/sync/test-sync-token", {
     method: "POST", body: JSON.stringify({ pipeline_id: pipeline.pipeline_id, ...payload }),
@@ -269,6 +340,7 @@ async function syncRequest(payload, selectedEnv = env) {
 }
 
 function stateForRead(url) {
+  if (url.includes("test-backup-corrupt") && url.includes("E-mail kimenet")) return [["Sérült backup"]];
   if (url.includes("test-staff-spreadsheet")) return staffState;
   if (url.includes("Tanfolyamok")) return configState;
   if (url.includes("E-mail kimenet")) return emailState;

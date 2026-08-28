@@ -20,6 +20,7 @@ accounttal közvetlenül hívja, nincs szükség Google Cloud Runra.
    npx wrangler secret put WEBHOOK_SHARED_SECRET
    npx wrangler secret put GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT
    npx wrangler secret put IMPORT_ADMIN_TOKEN
+   npx wrangler secret put IMPORT_BACKUP_SOURCE_CONFIG_JSON
    npx wrangler secret put EMAIL_ADMIN_TOKEN
    npx wrangler secret put SYNC_ADMIN_TOKEN
    npx wrangler secret put BREVO_API_KEY
@@ -114,6 +115,26 @@ Az `E-mail kimenet` előzményében már szereplő, de a főlapról hiányzó ID
 importtervben külön látszik. A rekord helyreállítható, de korábbi Brevo- vagy
 kézi küldési bizonyíték mellett új levél nem készül.
 
+### Automatikus Drive-backup kiválasztás
+
+A normál importoldal **nem kér backup-ID-t**. A Worker az
+`IMPORT_BACKUP_SOURCE_CONFIG_JSON` konfigurációból a pipeline-hoz tartozó
+Drive-mappát használja, és a legfrissebb alkalmas Google Sheets-másolatot
+választja. A konfiguráció mintája az
+`import-backup-source.json.example` fájlban van.
+
+Egy jelölt backup csak akkor fogadható el, ha a megbízható mappában van, nem
+régebbi a konfigurált `max_age_minutes` értéknél, ugyanazokat a kötelező
+fő- és e-mail-lapfejléceket tartalmazza, és a fő Sheet és az `E-mail kimenet`
+tartalmi hash-e pontosan egyezik a végrehajtás előtti production pillanatképpel.
+Ha nincs ilyen fájl, az import biztonságosan megáll, nem kér kézi ID-t és nem
+ír Sheetbe.
+
+A kézi backup-ID nincs az UI-ban. Csak rendkívüli API-s admin felülbírálással
+használható, külön `IMPORT_EMERGENCY_ADMIN_TOKEN`,
+`X-Import-Emergency-Token` és `X-Import-Backup-Override: emergency` mellett;
+ekkor is lefut a frissesség-, séma- és tartalmi egyezésvizsgálat.
+
 ### Karbantartási kapcsoló
 
 `RECOVERY_MAINTENANCE_MODE` alapértéke zárt: az értéke csak a külön
@@ -126,12 +147,13 @@ Az import eredményoldala a tervből automatikusan kiválasztott, friss ID-kra
 ID-listát megadni. A piszkozatkészítés nem kapcsol be jóváhagyást és nem küld
 Brevo-levelet.
 
-Az importterv ellenőrzése után, de az éles végrehajtás előtt készíts friss
-Drive-másolatot. A parancs kiírja a backup ID-t; ezt kell az importoldal
-utolsó lépésében megadni.
+Az automatikus forrásmappába egy külön üzemeltetői folyamatnak friss
+Drive-másolatot kell tennie. A Worker ezt maga választja ki; a felhasználó az
+import UI-ban nem másol és nem ad meg azonosítót.
 
 ```bash
 python3 scripts/create_production_sheet_backup.py \
+  --backup-folder-id '<konfigurált-mappa-id>' \
   --report reports/import-backup-YYYY-MM-DD.json
 ```
 
