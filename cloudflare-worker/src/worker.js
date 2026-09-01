@@ -1442,7 +1442,7 @@ function registrationFromPayload(adapter, payload) {
 
 function parseCourse(raw) {
   const parts = text(raw).split("/").map((part) => part.trim()).filter(Boolean);
-  if (parts.length < 4) throw new Error(`Érvénytelen tanfolyam: ${raw}`);
+  if (parts.length < 4) return { venue: "", teacher: "", time: "" };
   return { venue: parts[1], teacher: parts[parts.length - 1], time: parts.slice(2, -1).join(", ").replace(" ÉS PÉNTEK ", ", PÉNTEK ") };
 }
 

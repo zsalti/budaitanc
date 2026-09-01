@@ -1,10 +1,24 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 
-import worker, { EMAIL_EVENT_LOG_HEADERS, EMAIL_OUTPUT_HEADERS } from "./src/worker.js";
+import worker, { EMAIL_EVENT_LOG_HEADERS, EMAIL_OUTPUT_HEADERS, registrationFromCsvRow } from "./src/worker.js";
 import { emailSettingsSheetRows } from "./src/email-templates.js";
 
 const fixture = await fs.readFile(new URL("./test-fixtures/dami-registration.csv", import.meta.url), "utf8");
+const flexibleCourseRegistration = registrationFromCsvRow({
+  "Jelentkező (növendék) neve": "Formátum Teszt",
+  "Választott tanfolyam": "HONLAPRÓL VÁLASZTOTT TANFOLYAM",
+  "Bejegyzés azonosító": "TEST-FLEXIBLE-COURSE",
+  "Bejegyzés dátuma": "2026-09-01 12:00:00",
+});
+assert.deepEqual(flexibleCourseRegistration.row.slice(0, 4), ["HONLAPRÓL VÁLASZTOTT TANFOLYAM", "", "", ""],
+  "a nem üres tanfolyam eltérő szövegformátuma nem állíthatja meg az importot");
+assert.throws(() => registrationFromCsvRow({
+  "Jelentkező (növendék) neve": "Hiányzó Tanfolyam Teszt",
+  "Bejegyzés azonosító": "TEST-MISSING-COURSE",
+  "Bejegyzés dátuma": "2026-09-01 12:00:00",
+}), /Kötelező: név, tanfolyam/,
+  "az üres tanfolyam továbbra sem kerülhet be a nyilvántartásba");
 const serviceAccount = await createTestServiceAccount();
 const pipeline = {
   pipeline_id: "tanctanfolyam_jelentkezes",
