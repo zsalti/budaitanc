@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 
-import worker, { EMAIL_EVENT_LOG_HEADERS, EMAIL_OUTPUT_HEADERS, registrationFromCsvRow } from "./src/worker.js";
+import worker, {
+  EMAIL_EVENT_LOG_HEADERS,
+  EMAIL_OUTPUT_HEADERS,
+  findStaffAppendRow,
+  indexedStaffRows,
+  planStaffSyncColumns,
+  registrationFromCsvRow,
+  staffRegistrationWriteRanges,
+} from "./src/worker.js";
 import { emailSettingsSheetRows } from "./src/email-templates.js";
 
 const fixture = await fs.readFile(new URL("./test-fixtures/dami-registration.csv", import.meta.url), "utf8");
@@ -19,6 +27,112 @@ assert.throws(() => registrationFromCsvRow({
   "Bejegyzés dátuma": "2026-09-01 12:00:00",
 }), /Kötelező: név, tanfolyam/,
   "az üres tanfolyam továbbra sem kerülhet be a nyilvántartásba");
+
+const staffHeaderWithLocalColumns = [
+  "Közlemény", "Tanfolyam neve", "Munkatársi saját mező", "Nap és terem", "Óra ideje",
+  "Táncpedagógusok", "Jelentkező (növendék) neve", "Jelentkezés ideje",
+  "Tanfolyamon részvétel kezdete / naptár", "I. féléves tandíjfizetés dátuma",
+  "Másik munkatársi mező", "II. féléves tandíj befizetés dátuma", "Egyéb megjegyzés",
+];
+const staffColumnPlan = planStaffSyncColumns([staffHeaderWithLocalColumns]);
+assert.deepEqual(staffColumnPlan.indexes, [0, 1, 3, 4, 5, 6, 7, 8, 9],
+  "a szinkron fejléc alapján ugorja át a munkatársi tulajdonú oszlopokat");
+assert.deepEqual(
+  staffRegistrationWriteRanges(
+    { tab_name: "TAGOK 2026-27" },
+    { syncValues: ["Fő Sheet tanfolyam", "2026-09-01"] },
+    7,
+    [1, 9],
+    ["preserve", "fill_if_blank"],
+    ["1001", "Munkatársi tanfolyam"],
+  ),
+  [{ range: "'TAGOK 2026-27'!J7:J7", values: [["2026-09-01"]] }],
+  "meglévő sorban kizárólag az üres első tandíjfizetési dátum tölthető ki",
+);
+assert.deepEqual(
+  staffRegistrationWriteRanges(
+    { tab_name: "TAGOK 2026-27" },
+    { syncValues: ["1001", "Tanfolyam", "Hétfő"] },
+    7,
+    [0, 1, 3],
+  ),
+  [
+    { range: "'TAGOK 2026-27'!A7:B7", values: [["1001", "Tanfolyam"]] },
+    { range: "'TAGOK 2026-27'!D7:D7", values: [["Hétfő"]] },
+  ],
+  "az írási tartomány nem fedheti le a közé ékelt munkatársi oszlopot",
+);
+assert.deepEqual(
+  staffRegistrationWriteRanges(
+    { tab_name: "TAGOK 2026-27" },
+    { syncValues: ["2026-09-01"] },
+    7,
+    [8],
+    ["fill_if_blank"],
+    [],
+  ),
+  [{ range: "'TAGOK 2026-27'!I7:I7", values: [["2026-09-01"]] }],
+  "az üres munkatársi I oszlop átveszi a fő Sheet kitöltött dátumát",
+);
+assert.deepEqual(
+  staffRegistrationWriteRanges(
+    { tab_name: "TAGOK 2026-27" },
+    { syncValues: [""] },
+    7,
+    [8],
+    ["fill_if_blank"],
+    ["", "", "", "", "", "", "", "", "2026-08-31"],
+  ),
+  [],
+  "a kitöltött munkatársi I oszlopot az üres fő-Sheet érték nem törölheti",
+);
+assert.deepEqual(
+  staffRegistrationWriteRanges(
+    { tab_name: "TAGOK 2026-27" },
+    { syncValues: ["2026-09-01"] },
+    7,
+    [8],
+    ["fill_if_blank"],
+    ["", "", "", "", "", "", "", "", "2026-08-31"],
+  ),
+  [],
+  "a kitöltött munkatársi I oszlopot eltérő fő-Sheet dátum sem írhatja felül",
+);
+assert.equal(findStaffAppendRow([
+  staffHeaderWithLocalColumns,
+  ["1001"],
+  [],
+  ["1002"],
+]), 5, "az új munkatársi rekord a belső üres sor helyett a lista végére kerül");
+assert.equal(findStaffAppendRow([
+  staffHeaderWithLocalColumns,
+  ["1001"],
+  ["", "", "munkatársi alapérték"],
+  ["", "", "munkatársi alapérték"],
+]), 3, "a következő rekord az utolsó ID után kerül, a céloldali alapértéket megőrző sorba");
+assert.equal(
+  indexedStaffRows([
+    staffHeaderWithLocalColumns,
+    ["1001"],
+    ["", "", "munkatársi alapérték"],
+  ], staffColumnPlan.indexes).size,
+  1,
+  "a kizárólag munkatársi oszlopban előkészített sor nem lehet szinkronhiba",
+);
+assert.throws(
+  () => indexedStaffRows([
+    staffHeaderWithLocalColumns,
+    ["1001"],
+    ["", "félig kitöltött tanfolyam"],
+  ], staffColumnPlan.indexes),
+  /szinkronmezőhöz Közlemény ID kötelező/,
+  "ID nélküli részleges szinkronadat mellett a folyamatnak írás nélkül meg kell állnia",
+);
+assert.throws(
+  () => planStaffSyncColumns([[...staffHeaderWithLocalColumns, "Tanfolyam"]]),
+  /Nem egyedi munkatársi Sheet fejléc: Tanfolyam/,
+  "a kétértelmű célfejléc mellett a szinkronnak írás nélkül meg kell állnia",
+);
 const serviceAccount = await createTestServiceAccount();
 const pipeline = {
   pipeline_id: "tanctanfolyam_jelentkezes",
@@ -257,7 +371,14 @@ try {
   assert.equal(syncPreviewResult.created, 1, "az előnézet felismeri a még hiányzó munkatársi sort");
   assert.equal(syncPreviewResult.updated, 0);
   assert.equal(syncPreviewResult.deleted, 0);
-  assert.equal(syncPreviewResult.added_columns.length, 3, "a hiányzó, kézi pénzügyi oszlopokat csak tervezi");
+  assert.equal(syncPreviewResult.added_columns.length, 1, "csak a hiányzó első tandíjfizetési dátumot tervezi");
+  assert.equal(syncPreviewResult.synced_columns.length, 9, "az előnézet megmutatja a szűk írási engedélylistát");
+  assert.equal(syncPreviewResult.new_row_columns.length, 9,
+    "az új sorokon az azonosító alapmezők és az első tandíjdátum tölthető ki");
+  assert.deepEqual(syncPreviewResult.existing_row_columns, ["I. féléves tandíjfizetés dátuma"],
+    "meglévő soron más mező nem írható");
+  assert.deepEqual(syncPreviewResult.conditional_columns, ["I. féléves tandíjfizetés dátuma"],
+    "az előnézet jelzi a csak üres célcellába írható oszlopot");
   assert.equal(staffState.length, 1, "az előnézet nem ír a munkatársi Sheetbe");
 
   const syncLocked = await syncRequest({ mode: "execute", plan_hash: syncPreviewResult.plan_hash }, { ...env, RECOVERY_MAINTENANCE_MODE: "on" });
@@ -284,28 +405,61 @@ try {
   assert.equal(syncExecutedResult.created, 1);
   assert.equal(staffState[1][0], "TEST-CODEX-20260723-001");
   assert.equal(staffState[1][5], "Codex Teszt Dami");
-  assert.deepEqual(staffState[0].slice(8, 11), [
-    "I. féléves tandíjfizetés dátuma", "II. féléves tandíj befizetés dátuma", "Egyéb megjegyzés",
-  ], "a végrehajtás csak jóváhagyott tervből hozza létre a szinkronoszlopokat");
+  assert.deepEqual(staffState[0].slice(8, 9), [
+    "I. féléves tandíjfizetés dátuma",
+  ], "a végrehajtás csak az engedélyezett szinkronoszlopot hozza létre");
+
+  staffState[1][8] = "2026-08-31";
+  staffState[0][9] = "Egyéb megjegyzés";
+  staffState[1][1] = "Munkatársi tanfolyamnév";
+  staffState[1][9] = "Munkatársi megjegyzés";
+  masterState[1][10] = "2026-09-01";
+  staffBackupState = staffState.map((row) => [...row]);
+  const preservedPaymentPreview = await syncRequest({ mode: "preview" });
+  const preservedPaymentResult = await preservedPaymentPreview.json();
+  assert.equal(preservedPaymentResult.updated, 0,
+    "a kitöltött munkatársi I oszlop eltérése nem lehet felülírandó frissítés");
+  assert.equal(staffState[1][8], "2026-08-31");
+  assert.equal(staffState[1][1], "Munkatársi tanfolyamnév");
+  assert.equal(staffState[1][9], "Munkatársi megjegyzés");
+
+  staffState[1][8] = "";
+  staffBackupState = staffState.map((row) => [...row]);
+  const fillPaymentPreview = await syncRequest({ mode: "preview" });
+  const fillPaymentResult = await fillPaymentPreview.json();
+  assert.equal(fillPaymentResult.updated, 1,
+    "az üres munkatársi I oszlop kitöltése jelenjen meg az előnézetben");
+  const fillPaymentExecution = await syncRequest({
+    mode: "execute", plan_hash: fillPaymentResult.plan_hash, backup_id: "test-staff-backup",
+  });
+  assert.equal(fillPaymentExecution.status, 200);
+  assert.equal(staffState[1][8], "2026-09-01",
+    "az üres munkatársi I oszlop megkapja a fő Sheet dátumát");
+  assert.equal(staffState[1][1], "Munkatársi tanfolyamnév",
+    "a feltételes I-frissítés nem írhatja át a meglévő alapmezőket");
+  assert.equal(staffState[1][9], "Munkatársi megjegyzés",
+    "a feltételes I-frissítés nem írhatja át az Egyéb megjegyzést");
 
   staffState.push(["TEST-CODEX-STALE-001", "Régi", "sor"]);
   staffBackupState = staffState.map((row) => [...row]);
   const staleSyncPreview = await syncRequest({ mode: "preview" });
   assert.equal(staleSyncPreview.status, 200);
   const staleSyncPreviewResult = await staleSyncPreview.json();
-  assert.equal(staleSyncPreviewResult.deleted, 1, "a preview kimutatja a törlendő, fő Sheetből hiányzó sort");
+  assert.equal(staleSyncPreviewResult.deleted, 0, "a munkatársi szinkron nem tervezhet sortörlést");
+  assert.deepEqual(staleSyncPreviewResult.staff_only_entry_ids, ["TEST-CODEX-STALE-001"],
+    "a preview figyelmeztetésként mutatja a csak munkatársi lapon lévő ID-t");
   assert.equal(staffState.length, 3, "a preview törlésmentes");
-  const deleteWithoutConfirmation = await syncRequest({
+  const preserveStaffOnly = await syncRequest({
     mode: "execute", plan_hash: staleSyncPreviewResult.plan_hash, backup_id: "test-staff-backup",
   });
-  assert.equal(deleteWithoutConfirmation.status, 409, "törlés külön megerősítés nélkül nem indulhat");
+  assert.equal(preserveStaffOnly.status, 200);
   assert.equal(staffState.length, 3);
-  const confirmedDelete = await syncRequest({
+  const ignoredDeleteRequest = await syncRequest({
     mode: "execute", plan_hash: staleSyncPreviewResult.plan_hash, backup_id: "test-staff-backup", allow_deletes: true,
   });
-  assert.equal(confirmedDelete.status, 200);
-  assert.equal(staffState.length, 2, "a jóváhagyott törlés a friss tervből, visszaolvasással zárul");
-  assert.equal(staffState.some((row) => row[0] === "TEST-CODEX-STALE-001"), false);
+  assert.equal(ignoredDeleteRequest.status, 200);
+  assert.equal(staffState.length, 3, "még egy régi allow_deletes kérés sem törölhet munkatársi sort");
+  assert.equal(staffState.some((row) => row[0] === "TEST-CODEX-STALE-001"), true);
 
   const importedDrafts = await importDraftRequest(draftGrant);
   assert.equal(importedDrafts.status, 200);

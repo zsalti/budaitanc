@@ -45,11 +45,34 @@ const CONTACT_FIRST_NAME_COLUMN = "AS";
 const STUDENT_FIRST_NAME_COLUMN = "AT";
 const BREVO_SEND_URL = "https://api.brevo.com/v3/smtp/email";
 const BREVO_TEMPLATE_URL = "https://api.brevo.com/v3/smtp/templates";
-const STAFF_BASE_SYNC_COLUMN_COUNT = 8;
-const STAFF_ADDITIONAL_SYNC_HEADERS = [
-  "I. féléves tandíjfizetés dátuma",
-  "II. féléves tandíj befizetés dátuma",
-  "Egyéb megjegyzés",
+const STAFF_BASE_SYNC_COLUMNS = [
+  { targetHeader: "Közlemény", sourceHeaders: ["Közlemény"], targetHeaders: ["Közlemény"] },
+  {
+    targetHeader: "Tanfolyam",
+    sourceHeaders: ["Gravity Forms tanfolyamérték", "Tanfolyam neve", "Tanfolyam"],
+    targetHeaders: ["Tanfolyam", "Tanfolyam neve", "Gravity Forms tanfolyamérték"],
+  },
+  { targetHeader: "Nap és terem", sourceHeaders: ["Nap és terem"], targetHeaders: ["Nap és terem"] },
+  { targetHeader: "Óra ideje", sourceHeaders: ["Óra ideje"], targetHeaders: ["Óra ideje"] },
+  {
+    targetHeader: "Táncpedagógusok",
+    sourceHeaders: ["Oktató", "Táncpedagógusok"],
+    targetHeaders: ["Táncpedagógusok", "Oktató"],
+  },
+  {
+    targetHeader: "Jelentkező (növendék) neve",
+    sourceHeaders: ["Jelentkező (növendék) neve"],
+    targetHeaders: ["Jelentkező (növendék) neve"],
+  },
+  { targetHeader: "Jelentkezés ideje", sourceHeaders: ["Jelentkezés ideje"], targetHeaders: ["Jelentkezés ideje"] },
+  {
+    targetHeader: "Tanfolyamon részvétel kezdete / naptár",
+    sourceHeaders: ["Tanfolyamon részvétel kezdete / naptár"],
+    targetHeaders: ["Tanfolyamon részvétel kezdete / naptár"],
+  },
+];
+const STAFF_ADDITIONAL_SYNC_COLUMNS = [
+  { name: "I. féléves tandíjfizetés dátuma", writeMode: "fill_if_blank" },
 ];
 const DEFAULT_IMPORT_BACKUP_MAX_AGE_MINUTES = 60;
 const DEFAULT_STAFF_SYNC_BACKUP_MAX_AGE_MINUTES = 60;
@@ -521,13 +544,6 @@ async function handleSync(request, env, token) {
         message: "A munkatársi Sheet az előnézet óta megváltozott. Készíts új előnézetet.",
       }, 409);
     }
-    if (plan.deleteRows.length && payload.allow_deletes !== true) {
-      return json({
-        error: "delete_confirmation_required",
-        message: "Az előnézet törlendő munkatársi sorokat talált. A végrehajtáshoz külön törlési jóváhagyás kell.",
-        ...staffSyncPlanSummary(plan),
-      }, 409);
-    }
     const backup = await verifyStaffSyncBackup(
       accessToken,
       pipeline.staff_target.spreadsheet_id,
@@ -543,9 +559,7 @@ async function handleSync(request, env, token) {
         message: "A munkatársi vagy fő Sheet az előnézet óta megváltozott. Készíts új előnézetet.",
       }, 409);
     }
-    const result = await syncStaffTarget(accessToken, pipeline, executionPlan, {
-      allowDeletes: payload.allow_deletes === true,
-    });
+    const result = await syncStaffTarget(accessToken, pipeline, executionPlan);
     return json({
       status: "ok",
       pipeline_id: pipeline.pipeline_id,
@@ -1524,17 +1538,38 @@ function staffRowFromRegistration(registration) {
 
 async function upsertStaffRegistrations(accessToken, target, registrations) {
   const baseUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(target.spreadsheet_id)}`;
-  const readRange = encodeURIComponent(`${quoteSheetName(target.tab_name)}!A:H`);
+  const readRange = encodeURIComponent(`${quoteSheetName(target.tab_name)}!A:ZZ`);
   const current = await googleFetch(`${baseUrl}/values/${readRange}`, accessToken);
   const rows = current.values || [];
   const mutableRows = rows.map((row) => [...row]);
+  if (text(rows[0]?.[0]) !== "Közlemény") {
+    throw new Error("A munkatársi Sheet első oszlopának Közleménynek kell lennie.");
+  }
+  const baseIndexes = resolveStaffBaseTargetIndexes(rows[0] || []);
+  const staffByEntryId = indexedStaffRows(rows, baseIndexes);
   const data = [];
 
   for (const registration of registrations) {
-    const rowIndex = findStaffRow(mutableRows, registration.entryId);
+    const existing = staffByEntryId.get(registration.entryId);
+    if (existing) continue;
+    const rowIndex = findStaffAppendRow(mutableRows);
+    const syncRegistration = { ...registration, syncValues: staffRowFromRegistration(registration) };
     while (mutableRows.length < rowIndex) mutableRows.push([]);
-    mutableRows[rowIndex - 1] = staffRowFromRegistration(registration);
-    data.push({ range: `${quoteSheetName(target.tab_name)}!A${rowIndex}:H${rowIndex}`, values: [mutableRows[rowIndex - 1]] });
+    const existingRow = mutableRows[rowIndex - 1] || [];
+    mutableRows[rowIndex - 1] = mergeStaffSyncValues(
+      existingRow,
+      syncRegistration,
+      baseIndexes,
+      baseIndexes.map(() => "overwrite"),
+    );
+    data.push(...staffRegistrationWriteRanges(
+      target,
+      syncRegistration,
+      rowIndex,
+      baseIndexes,
+      baseIndexes.map(() => "overwrite"),
+      existingRow,
+    ));
   }
 
   if (data.length) {
@@ -1545,20 +1580,17 @@ async function upsertStaffRegistrations(accessToken, target, registrations) {
   }
 }
 
-function findStaffRow(rows, entryId) {
-  for (let index = 1; index < rows.length; index += 1) {
-    if (entryId && text(rows[index]?.[0]) === entryId) return index + 1;
-  }
-  for (let index = 1; index < rows.length; index += 1) if (!text(rows[index]?.[5])) return index + 1;
-  return Math.max(2, rows.length + 1);
-}
-
 async function buildStaffSyncPlan(accessToken, pipeline) {
   const masterRows = await readSheetRows(accessToken, pipeline.spreadsheet_id, pipeline.tab_name, "A:ZZ");
   const master = validateMasterRows(masterRows);
+  const baseSyncColumns = requiredHeaderAliasIndexes(
+    master.header,
+    STAFF_BASE_SYNC_COLUMNS.map(({ sourceHeaders }) => sourceHeaders),
+    "fő Sheet",
+  );
   const additionalSyncColumns = requiredHeaderIndexes(
     master.header,
-    STAFF_ADDITIONAL_SYNC_HEADERS,
+    STAFF_ADDITIONAL_SYNC_COLUMNS.map(({ name }) => name),
     "fő Sheet",
   );
 
@@ -1568,6 +1600,7 @@ async function buildStaffSyncPlan(accessToken, pipeline) {
       studentName: text(row[5]),
       submittedAt: text(row[6]),
       row: row.slice(1),
+      baseSyncValues: baseSyncColumns.map((columnIndex) => text(row[columnIndex])),
       additionalSyncValues: additionalSyncColumns.map((columnIndex) => text(row[columnIndex])),
     }));
   const target = pipeline.staff_target;
@@ -1575,8 +1608,8 @@ async function buildStaffSyncPlan(accessToken, pipeline) {
   if (text(staffRows[0]?.[0]) !== "Közlemény") {
     throw new Error("A munkatársi Sheet első oszlopának Közleménynek kell lennie.");
   }
-  const staffAdditionalColumnPlan = planStaffAdditionalSyncColumns(staffRows);
-  const staffByEntryId = indexedStaffRows(staffRows);
+  const staffColumnPlan = planStaffSyncColumns(staffRows);
+  const staffByEntryId = indexedStaffRows(staffRows, staffColumnPlan.indexes);
   const masterIds = new Set(registrations.map((registration) => registration.entryId));
   const mutableRows = staffRows.map((row) => [...row]);
   const writes = [];
@@ -1585,24 +1618,45 @@ async function buildStaffSyncPlan(accessToken, pipeline) {
   let unchanged = 0;
 
   for (const registration of registrations) {
+    registration.syncValues = [...registration.baseSyncValues, ...registration.additionalSyncValues];
     const existing = staffByEntryId.get(registration.entryId);
-    const rowIndex = existing ? existing.rowIndex : findVacantStaffRow(mutableRows);
-    if (existing && staffRegistrationMatches(existing.row, registration, staffAdditionalColumnPlan.indexes)) {
+    registration.staffWriteModes = existing
+      ? staffColumnPlan.existingRowWriteModes
+      : staffColumnPlan.newRowWriteModes;
+    const rowIndex = existing ? existing.rowIndex : findStaffAppendRow(mutableRows);
+    const existingRow = mutableRows[rowIndex - 1] || [];
+    if (existing && staffRegistrationMatches(
+      existing.row,
+      registration,
+      staffColumnPlan.indexes,
+      registration.staffWriteModes,
+    )) {
       unchanged += 1;
       continue;
     }
     while (mutableRows.length < rowIndex) mutableRows.push([]);
-    mutableRows[rowIndex - 1] = staffRowFromRegistration(registration);
-    writes.push(...staffRegistrationWriteRanges(target, registration, rowIndex, staffAdditionalColumnPlan.indexes));
+    mutableRows[rowIndex - 1] = mergeStaffSyncValues(
+      existingRow,
+      registration,
+      staffColumnPlan.indexes,
+      registration.staffWriteModes,
+    );
+    writes.push(...staffRegistrationWriteRanges(
+      target,
+      registration,
+      rowIndex,
+      staffColumnPlan.indexes,
+      registration.staffWriteModes,
+      existingRow,
+    ));
     if (existing) updatedEntryIds.push(registration.entryId);
     else createdEntryIds.push(registration.entryId);
   }
 
-  const deleteRows = staffRows
-    .map((row, index) => ({ row, index }))
-    .filter(({ row, index }) => index > 0 && text(row?.[0]) && !masterIds.has(text(row[0])))
-    .map(({ index }) => index + 1)
-    .sort((left, right) => right - left);
+  const staffOnlyEntryIds = staffRows
+    .slice(1)
+    .map((row) => text(row?.[0]))
+    .filter((entryId) => entryId && !masterIds.has(entryId));
 
   const planPayload = {
     pipeline_id: pipeline.pipeline_id,
@@ -1611,15 +1665,19 @@ async function buildStaffSyncPlan(accessToken, pipeline) {
     created_entry_ids: createdEntryIds,
     updated_entry_ids: updatedEntryIds,
     unchanged,
-    delete_rows: deleteRows,
-    added_columns: staffAdditionalColumnPlan.addedColumns,
+    staff_only_entry_ids: staffOnlyEntryIds,
+    added_columns: staffColumnPlan.addedColumns,
+    synced_columns: staffColumnPlan.syncedColumns,
+    new_row_columns: staffColumnPlan.newRowColumns,
+    existing_row_columns: staffColumnPlan.existingRowColumns,
+    conditional_columns: staffColumnPlan.conditionalColumns,
   };
   return {
     target,
     registrations,
     writes,
-    deleteRows,
-    ...staffAdditionalColumnPlan,
+    staffOnlyEntryIds,
+    ...staffColumnPlan,
     created: createdEntryIds.length,
     updated: updatedEntryIds.length,
     unchanged,
@@ -1635,21 +1693,33 @@ function staffSyncPlanSummary(plan) {
     created: plan.created,
     updated: plan.updated,
     unchanged: plan.unchanged,
-    deleted: plan.deleteRows.length,
+    deleted: 0,
     total: plan.total,
     added_columns: plan.addedColumns.map(({ name }) => name),
-    requires_delete_confirmation: plan.deleteRows.length > 0,
+    synced_columns: plan.syncedColumns,
+    new_row_columns: plan.newRowColumns,
+    existing_row_columns: plan.existingRowColumns,
+    conditional_columns: plan.conditionalColumns,
+    staff_only_entry_ids: plan.staffOnlyEntryIds,
+    requires_delete_confirmation: false,
   };
 }
 
-function indexedStaffRows(staffRows) {
+function indexedStaffRows(staffRows, syncColumnIndexes) {
   const byEntryId = new Map();
   for (let index = 1; index < staffRows.length; index += 1) {
     const row = staffRows[index] || [];
     if (!row.some((value) => text(value))) continue;
     const entryId = text(row[0]);
     if (!entryId) {
-      throw new Error(`A munkatársi Sheet ${index + 1}. sora nem biztonságos: nem üres sorhoz Közlemény ID kötelező.`);
+      const populatedSyncColumns = syncColumnIndexes.filter((columnIndex) => text(row[columnIndex]));
+      if (populatedSyncColumns.length) {
+        throw new Error(`A munkatársi Sheet ${index + 1}. sora nem biztonságos: szinkronmezőhöz Közlemény ID kötelező.`);
+      }
+      // A munkatársi lap előre formázott vagy céloldali alapértéket tartalmazó
+      // üres sorai megengedettek. A szinkron csak a saját engedélyezett
+      // oszlopaiba ír, ezért ezeket az értékeket később is megőrzi.
+      continue;
     }
     if (byEntryId.has(entryId)) throw new Error(`Duplikált ID a munkatársi Sheetben: ${entryId}.`);
     byEntryId.set(entryId, { row, rowIndex: index + 1 });
@@ -1657,56 +1727,143 @@ function indexedStaffRows(staffRows) {
   return byEntryId;
 }
 
-function planStaffAdditionalSyncColumns(staffRows) {
+function resolveStaffBaseTargetIndexes(header) {
+  return requiredHeaderAliasIndexes(
+    header,
+    STAFF_BASE_SYNC_COLUMNS.map(({ targetHeaders }) => targetHeaders),
+    "munkatársi Sheet",
+  );
+}
+
+function planStaffSyncColumns(staffRows) {
   const header = [...(staffRows[0] || [])];
+  const baseIndexes = resolveStaffBaseTargetIndexes(header);
   const addedColumns = [];
-  const indexes = STAFF_ADDITIONAL_SYNC_HEADERS.map((name) => {
-    const existingIndex = headerIndex(header, name);
+  let nextColumnIndex = Math.max(
+    header.length,
+    ...staffRows.map((row) => lastNonemptyColumnIndex(row) + 1),
+  );
+  const additionalIndexes = STAFF_ADDITIONAL_SYNC_COLUMNS.map(({ name }) => {
+    const existingIndex = uniqueHeaderIndex(header, [name], "munkatársi Sheet", false);
     if (existingIndex >= 0) return existingIndex;
-    const newIndex = Math.max(header.length, STAFF_BASE_SYNC_COLUMN_COUNT);
+    const newIndex = nextColumnIndex;
+    nextColumnIndex += 1;
     header[newIndex] = name;
     addedColumns.push({ name, index: newIndex });
     return newIndex;
   });
-  return { indexes, addedColumns, requiredColumnCount: header.length };
+  const indexes = [...baseIndexes, ...additionalIndexes];
+  if (new Set(indexes).size !== indexes.length) {
+    throw new Error("A munkatársi Sheet szinkronizált oszlopai nem egyediek.");
+  }
+  return {
+    indexes,
+    newRowWriteModes: [
+      ...baseIndexes.map(() => "overwrite"),
+      ...STAFF_ADDITIONAL_SYNC_COLUMNS.map(({ writeMode }) => writeMode),
+    ],
+    existingRowWriteModes: [
+      ...baseIndexes.map(() => "preserve"),
+      ...STAFF_ADDITIONAL_SYNC_COLUMNS.map(({ writeMode }) => writeMode),
+    ],
+    addedColumns,
+    requiredColumnCount: Math.max(header.length, nextColumnIndex),
+    syncedColumns: [
+      ...STAFF_BASE_SYNC_COLUMNS.map(({ targetHeader }) => targetHeader),
+      ...STAFF_ADDITIONAL_SYNC_COLUMNS.map(({ name }) => name),
+    ],
+    newRowColumns: [
+      ...STAFF_BASE_SYNC_COLUMNS.map(({ targetHeader }) => targetHeader),
+      ...STAFF_ADDITIONAL_SYNC_COLUMNS.map(({ name }) => name),
+    ],
+    existingRowColumns: STAFF_ADDITIONAL_SYNC_COLUMNS.map(({ name }) => name),
+    conditionalColumns: STAFF_ADDITIONAL_SYNC_COLUMNS
+      .filter(({ writeMode }) => writeMode === "fill_if_blank")
+      .map(({ name }) => name),
+  };
 }
 
-function staffRegistrationMatches(row, registration, additionalColumnIndexes) {
-  const base = staffRowFromRegistration(registration);
-  if (base.some((value, index) => text(row[index]) !== text(value))) return false;
-  return additionalColumnIndexes.every((columnIndex, valueIndex) => (
-    text(row[columnIndex]) === text(registration.additionalSyncValues[valueIndex])
+function lastNonemptyColumnIndex(row) {
+  for (let index = (row || []).length - 1; index >= 0; index -= 1) {
+    if (text(row[index])) return index;
+  }
+  return -1;
+}
+
+function shouldWriteStaffValue(currentValue, nextValue, writeMode) {
+  if (writeMode === "preserve") return false;
+  if (writeMode === "fill_if_blank") return !text(currentValue) && Boolean(text(nextValue));
+  return text(currentValue) !== text(nextValue);
+}
+
+function staffRegistrationMatches(row, registration, syncColumnIndexes, writeModes) {
+  return syncColumnIndexes.every((columnIndex, valueIndex) => (
+    !shouldWriteStaffValue(
+      row[columnIndex],
+      registration.syncValues[valueIndex],
+      writeModes[valueIndex],
+    )
   ));
 }
 
-function staffRegistrationWriteRanges(target, registration, rowIndex, additionalColumnIndexes) {
-  const values = [{
-    range: `${quoteSheetName(target.tab_name)}!A${rowIndex}:H${rowIndex}`,
-    values: [staffRowFromRegistration(registration)],
-  }];
-  additionalColumnIndexes.forEach((columnIndex, valueIndex) => {
-    values.push({
-      range: `${quoteSheetName(target.tab_name)}!${columnLetter(columnIndex)}${rowIndex}`,
-      values: [[registration.additionalSyncValues[valueIndex]]],
-    });
+function mergeStaffSyncValues(row, registration, syncColumnIndexes, writeModes) {
+  const merged = [...(row || [])];
+  syncColumnIndexes.forEach((columnIndex, valueIndex) => {
+    if (shouldWriteStaffValue(merged[columnIndex], registration.syncValues[valueIndex], writeModes[valueIndex])) {
+      merged[columnIndex] = registration.syncValues[valueIndex];
+    }
   });
-  return values;
+  return merged;
 }
 
-function findVacantStaffRow(rows) {
-  for (let index = 1; index < rows.length; index += 1) {
-    if (!(rows[index] || []).some((value) => text(value))) return index + 1;
+function staffRegistrationWriteRanges(
+  target,
+  registration,
+  rowIndex,
+  syncColumnIndexes,
+  writeModes = syncColumnIndexes.map(() => "overwrite"),
+  existingRow = [],
+) {
+  const cells = syncColumnIndexes
+    .map((columnIndex, valueIndex) => ({
+      columnIndex,
+      value: registration.syncValues[valueIndex],
+      writeMode: writeModes[valueIndex],
+    }))
+    .filter(({ columnIndex, value, writeMode }) => (
+      shouldWriteStaffValue(existingRow[columnIndex], value, writeMode)
+    ))
+    .sort((left, right) => left.columnIndex - right.columnIndex);
+  const groups = [];
+  for (const cell of cells) {
+    const group = groups[groups.length - 1];
+    if (!group || cell.columnIndex !== group.endColumnIndex + 1) {
+      groups.push({ startColumnIndex: cell.columnIndex, endColumnIndex: cell.columnIndex, values: [cell.value] });
+    } else {
+      group.endColumnIndex = cell.columnIndex;
+      group.values.push(cell.value);
+    }
   }
-  return Math.max(2, rows.length + 1);
+  return groups.map((group) => {
+    const start = columnLetter(group.startColumnIndex);
+    const end = columnLetter(group.endColumnIndex);
+    return {
+      range: `${quoteSheetName(target.tab_name)}!${start}${rowIndex}:${end}${rowIndex}`,
+      values: [group.values],
+    };
+  });
 }
 
-async function syncStaffTarget(accessToken, pipeline, plan, { allowDeletes = false } = {}) {
-  if (plan.deleteRows.length && !allowDeletes) {
-    throw new Error("A munkatársi Sheetből való törléshez külön jóváhagyás kell.");
+function findStaffAppendRow(rows) {
+  for (let index = rows.length - 1; index >= 1; index -= 1) {
+    if (text(rows[index]?.[0])) return index + 2;
   }
+  return 2;
+}
+
+async function syncStaffTarget(accessToken, pipeline, plan) {
   await applyStaffAdditionalSyncColumns(accessToken, plan.target, plan);
   if (plan.writes.length) await writeSheetRanges(accessToken, plan.target.spreadsheet_id, plan.writes);
-  if (plan.deleteRows.length) await deleteRowsByIndex(accessToken, plan.target, plan.deleteRows);
   await verifyStaffSyncTarget(accessToken, plan);
   return staffSyncPlanSummary(plan);
 }
@@ -1718,6 +1875,26 @@ function requiredHeaderIndexes(header, names, sheetDescription) {
     throw new Error(`Hiányzó kötelező ${sheetDescription} fejléc: ${missing.join(", ")}.`);
   }
   return indexes;
+}
+
+function requiredHeaderAliasIndexes(header, aliasesByColumn, sheetDescription) {
+  return aliasesByColumn.map((aliases) => uniqueHeaderIndex(header, aliases, sheetDescription, true));
+}
+
+function uniqueHeaderIndex(header, aliases, sheetDescription, required) {
+  const expected = new Set(aliases.map((name) => normalizeHeader(name)));
+  const matches = header
+    .map((value, index) => ({ value: normalizeHeader(value), index }))
+    .filter(({ value }) => value && expected.has(value))
+    .map(({ index }) => index);
+  if (!matches.length) {
+    if (!required) return -1;
+    throw new Error(`Hiányzó kötelező ${sheetDescription} fejléc: ${aliases[0]}.`);
+  }
+  if (matches.length > 1) {
+    throw new Error(`Nem egyedi ${sheetDescription} fejléc: ${aliases[0]}.`);
+  }
+  return matches[0];
 }
 
 function headerIndex(header, name) {
@@ -1737,17 +1914,12 @@ async function applyStaffAdditionalSyncColumns(accessToken, target, plan) {
 async function verifyStaffSyncTarget(accessToken, plan) {
   const rows = await readSheetRows(accessToken, plan.target.spreadsheet_id, plan.target.tab_name, "A:ZZ");
   if (text(rows[0]?.[0]) !== "Közlemény") throw new Error("A munkatársi Sheet írás után elvesztette a Közlemény fejlécet.");
-  const byEntryId = indexedStaffRows(rows);
+  const byEntryId = indexedStaffRows(rows, plan.indexes);
   for (const registration of plan.registrations) {
     const actual = byEntryId.get(registration.entryId);
-    if (!actual || !staffRegistrationMatches(actual.row, registration, plan.indexes)) {
+    if (!actual || !staffRegistrationMatches(actual.row, registration, plan.indexes, registration.staffWriteModes)) {
       throw new Error(`A munkatársi Sheet visszaolvasása eltér: ${registration.entryId}.`);
     }
-  }
-  if (plan.deleteRows.length) {
-    const masterIds = new Set(plan.registrations.map((registration) => registration.entryId));
-    const unexpected = [...byEntryId.keys()].filter((entryId) => !masterIds.has(entryId));
-    if (unexpected.length) throw new Error("A jóváhagyott törlés után maradt fő Sheetből hiányzó munkatársi sor.");
   }
 }
 
@@ -2814,19 +2986,6 @@ function spreadsheetColumnNumber(column) {
   return [...String(column)].reduce((total, char) => total * 26 + char.charCodeAt(0) - 64, 0);
 }
 
-async function deleteRowsByIndex(accessToken, target, rowIndexes) {
-  const sheetId = await getSheetId(accessToken, target.spreadsheet_id, target.tab_name);
-  const baseUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(target.spreadsheet_id)}`;
-  await googleFetch(`${baseUrl}:batchUpdate`, accessToken, {
-    method: "POST",
-    body: JSON.stringify({
-      requests: rowIndexes.map((rowIndex) => ({
-        deleteDimension: { range: { sheetId, dimension: "ROWS", startIndex: rowIndex - 1, endIndex: rowIndex } },
-      })),
-    }),
-  });
-}
-
 async function getSheetId(accessToken, spreadsheetId, tabName) {
   const baseUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}`;
   const result = await getSpreadsheetMetadata(accessToken, spreadsheetId);
@@ -3068,7 +3227,8 @@ function escapeHtml(value) { return String(value).replace(/[&<>"']/g, (char) => 
 
 export {
   CSV_HEADERS, brevoSendKey, brevoStatus, buildApprovedCorrections, emailRevisionHashFromRow, extractReferences,
-  findMasterRow, mergeMasterRow, nameSuggestions, normalizeForMatch, parseCsv, parseCsvRegistrations,
+  findMasterRow, findStaffAppendRow, indexedStaffRows, mergeMasterRow, nameSuggestions, normalizeForMatch, parseCsv, parseCsvRegistrations,
+  planStaffSyncColumns, staffRegistrationWriteRanges,
   partitionManualImportRegistrations, paymentFromRow, recordBrevoEvent, registrationFromCsvRow,
   appendOnlyMasterRegistrations, readImportSnapshot,
 };

@@ -202,27 +202,52 @@ python3 scripts/restore_from_verified_staging.py \
 **Védett, kétlépcsős működés.** A `/sync/<SYNC_ADMIN_TOKEN>` csak `POST`
 kérést fogad. A `mode: "preview"` kizárólag olvas: megszámolja az új,
 frissítendő, változatlan és a fő Sheetből hiányzó munkatársi sorokat, valamint
-az esetleg létrehozandó három oszlopot. Sem preview, sem hibás token nem ír.
+az esetleg létrehozandó tandíjfizetési dátumoszlopot. Sem preview, sem hibás
+token nem ír.
 
 Az `mode: "execute"` csak akkor ír, ha az előnézet tervhash-e változatlan,
 megadnak egy legfeljebb 60 perces, a munkatársi Sheet előnézetkori állapotával
 tartalmi hash szerint egyező Drive-másolat azonosítót, és az előnézet utáni
-újraolvasás is ugyanazt a tervet adja. Ha törlendő sor lenne, az
-`allow_deletes: true` külön, emberi megerősítése is kötelező. Az írás után a
-Worker visszaolvassa és ellenőrzi az összes szinkronizált sort.
+újraolvasás is ugyanazt a tervet adja. A szinkron munkatársi sort nem töröl;
+a csak munkatársi lapon szereplő ID-ket figyelmeztetésként jelzi és
+érintetlenül hagyja. Az írás után a Worker visszaolvassa és ellenőrzi az
+összes szinkronizált sort.
 Egy nem üres, de ID nélküli vagy duplikált ID-jú munkatársi sor azonnal
 megállítja a folyamatot.
 
-A pipeline `staff_target` beállítása esetén a teljes szinkron az `A:H`
-mezőkön felül az `I. féléves tandíjfizetés dátuma`, a
-`II. féléves tandíj befizetés dátuma` és az `Egyéb megjegyzés` mezőt is átviszi.
-Ha ezek még hiányoznak a munkatársi lap fejlécéből, létrehozza őket; a többi kézi, pénzügyi és
-megjegyzés-oszlop érintetlen marad.
+A pipeline `staff_target` beállítása esetén a szinkron nem pozíció szerint ír
+egy teljes `A:H` blokkot. A fejléc alapján megkeresi a következő engedélyezett
+mezőket: `Közlemény`, `Tanfolyam`, `Nap és terem`, `Óra ideje`,
+`Táncpedagógusok`, `Jelentkező (növendék) neve`, `Jelentkezés ideje`,
+`Tanfolyamon részvétel kezdete / naptár` és
+`I. féléves tandíjfizetés dátuma`. Az első nyolc mezőt kizárólag új sor
+létrehozásakor tölti ki. Meglévő ID-s sorban csak az első féléves
+tandíjfizetés dátumába írhat. Az `Egyéb megjegyzés`, a második féléves
+tandíjfizetés dátuma és minden más munkatársi mező teljesen kívül marad az
+írási engedélylistán.
+
+A közéjük szúrt vagy mellettük lévő munkatársi, pénzügyi és
+megjegyzés-oszlopokat nem fedi le az írási tartomány, ezért azok értékei
+érintetlenek maradnak. Hiányzó vagy kétértelmű alapfejlécnél a szinkron írás
+nélkül megáll; a tandíjfizetési dátum mezőt szükség esetén a teljes
+használt oszloptartomány után hozza létre.
+
+Az `I. féléves tandíjfizetés dátuma` feltételes mező: a fő Sheet kitöltött
+értéke csak akkor kerül át, ha ugyanannak az ID-nak a munkatársi cellája üres.
+Már kitöltött munkatársi dátumot a szinkron akkor sem cserél le vagy töröl, ha
+a fő Sheetben más érték vagy üres cella szerepel.
+
+Meglévő rekordot kizárólag a `Közlemény` ID alapján frissít. Új rekord nem
+kerülhet két ID-s rekord közötti üres sorba: mindig az utolsó ID-s sor után kap
+helyet. Ha ez a sor már tartalmaz munkatársi alapértéket egy nem szinkronizált
+oszlopban, az érték megmarad. ID nélküli, de részben kitöltött szinkronmező
+esetén a folyamat írás nélkül megáll. A szinkron nem szúr be cellát vagy
+részleges sort, ezért nem tudja az oszlopokat egymáshoz képest eltolni.
 
 A fő Sheethez kötött Apps Scriptben a `Budai Tánc → Munkatársi Sheet-szinkron
 előnézete` indít írásmentes ellenőrzést; a külön `… végrehajtása` menüpont
-előbb megmutatja az eredményt, majd a backup-ID-t és – szükség esetén – a
-törlést is emberrel hagyatja jóvá. A kód az
+előbb megmutatja az eredményt, majd a backup-ID-t és a végrehajtást is
+emberrel hagyatja jóvá. A kód az
 `../apps-script/master-sheet-sync.gs` fájlban van. A token egyszeri megadása
 a Script Properties-ben történik. A bound Apps Scriptbe a kiadott forrást még
 külön be kell másolni/publikálni; a Worker deploy önmagában nem módosít Google

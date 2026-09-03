@@ -75,15 +75,6 @@ function syncStaffSheet() {
   );
   if (confirmation !== ui.Button.YES) return;
 
-  if (Number(preview.deleted || 0) > 0) {
-    const deleteConfirmation = ui.alert(
-      'Törlési megerősítés szükséges',
-      `${preview.deleted} munkatársi sor nincs már a fő Sheetben, ezért a szinkron törölné. Ez visszafordítható a backupból, de csak tudatos jóváhagyással futtatható. Folytatod?`,
-      ui.ButtonSet.YES_NO,
-    );
-    if (deleteConfirmation !== ui.Button.YES) return;
-  }
-
   const backupPrompt = ui.prompt(
     'Friss Drive-backup azonosító',
     'Add meg a közvetlenül a munkatársi Sheet-ről készített, elérhető Google Sheets Drive-másolat azonosítóját.',
@@ -97,7 +88,6 @@ function syncStaffSheet() {
     mode: 'execute',
     plan_hash: preview.plan_hash,
     backup_id: backupId,
-    allow_deletes: Number(preview.deleted || 0) > 0,
   });
   showStaffSyncResult_('Munkatársi Sheet-szinkron elkészült', result);
 }
@@ -181,8 +171,16 @@ function callSyncEndpoint_(payload) {
 
 function staffSyncSummary_(result) {
   const extraColumns = (result.added_columns || []).join(', ') || 'nincs';
+  const newRowColumns = (result.new_row_columns || result.synced_columns || []).join(', ') || 'n/a';
+  const existingRowColumns = (result.existing_row_columns || []).join(', ') || 'nincs';
+  const conditionalColumns = (result.conditional_columns || []).join(', ') || 'nincs';
+  const staffOnlyIds = (result.staff_only_entry_ids || []).join(', ') || 'nincs';
   return `Új: ${result.created || 0}; frissül: ${result.updated || 0}; változatlan: ${result.unchanged || 0}; ` +
-    `törlendő: ${result.deleted || 0}; összes fő Sheet-rekord: ${result.total || 0}; új oszlopok: ${extraColumns}.`;
+    `összes fő Sheet-rekord: ${result.total || 0}; új oszlopok: ${extraColumns}.\n` +
+    `Új soron kitöltött oszlopok: ${newRowColumns}.\n` +
+    `Meglévő soron írható oszlopok: ${existingRowColumns}.\n` +
+    `Csak üres munkatársi cellába írható: ${conditionalColumns}.\n` +
+    `Csak a munkatársi lapon szereplő, érintetlenül hagyott ID-k: ${staffOnlyIds}.`;
 }
 
 function showStaffSyncResult_(title, result) {
