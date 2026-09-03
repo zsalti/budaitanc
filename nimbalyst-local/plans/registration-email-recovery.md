@@ -1,5 +1,10 @@
 # A jelentkezés–e-mail képesség biztonságos visszaállítása
 
+> **2026-09-01-i felülírás:** a jelenlegi éles fő Sheet a jó és kanonikus
+> állapot. A korábbi staging-visszaírási lépések történeti leírások, nem
+> végrehajtási utasítások. Az aktuális 6 pontos menet:
+> [Biztonságos helyreállítás a mostani fő Sheetből](current-sheet-safe-recovery.md).
+
 **Állapot:** végrehajtás folyamatban — production visszaállítva 2026-08-27  
 **Dátum:** 2026-08-26
 

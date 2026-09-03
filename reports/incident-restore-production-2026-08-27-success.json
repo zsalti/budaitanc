@@ -1,0 +1,116 @@
+{
+  "drive_backup": {
+    "backup_source": "human_owned_copy",
+    "createdTime": "2026-08-27T07:53:46.429Z",
+    "id": "1DcRYM58sQ5Jl-0s59q6x6gtwi-6TEtQgWibKBR-KWxM",
+    "name": "Budai Tánc – production mentés helyreállítás előtt 2026-08-27",
+    "verified_semantic_hashes": {
+      "E-mail kimenet": "6b15166bd3a410ede9a28f13626cd6befb15aeacded1210dd269b280c84d73ae",
+      "E-mail kimenet – incidensarchívum": "6baac5896b64ec9499f1e005ac0b2bdcc02f4191bf8724e155f33cc5d2e72ca2",
+      "Kézi elbírálás teendők": "0ebe11b16eac6fb9b59bb1281b7ee242a81a5220b69f2249e372323e80be59fd",
+      "Kézi küldés egyeztetés": "8471f2260773b4732196ab7a09b090e14d6d06095f5282ee0794461f1c68e336",
+      "master": "4fb9d7328796f16c7bde14595372cd74685a3b642969e4a0d1a7b791c4f9f61b"
+    },
+    "webViewLink": "https://docs.google.com/spreadsheets/d/1DcRYM58sQ5Jl-0s59q6x6gtwi-6TEtQgWibKBR-KWxM/edit?usp=drivesdk"
+  },
+  "generated_at": "2026-08-27T07:56:07.187990+00:00",
+  "historical_raw_email_output_hash": "04567732dace7eb8b2b755fed51c0e159496ef8329160dc9ed68ab07e0736b4e",
+  "migration_succeeded": true,
+  "mode": "verified_staging_restore",
+  "preserved_post_migration_send_evidence": [
+    {
+      "evidence_type": "manual",
+      "message_id": "MANUÁLIS",
+      "send_key": "1932|ENROLLMENT|1|2026-08-18-v3",
+      "status": "ELKÜLDVE"
+    },
+    {
+      "evidence_type": "manual",
+      "message_id": "MANUÁLIS",
+      "send_key": "1939|ENROLLMENT|1|2026-08-18-v3",
+      "status": "ELKÜLDVE"
+    },
+    {
+      "evidence_type": "manual",
+      "message_id": "MANUÁLIS",
+      "send_key": "1940|TRIAL|PRÓBA|2026-08-18-v3",
+      "status": "ELKÜLDVE"
+    },
+    {
+      "evidence_type": "manual",
+      "message_id": "MANUÁLIS",
+      "send_key": "1941|ENROLLMENT|1|2026-08-18-v3",
+      "status": "ELKÜLDVE"
+    },
+    {
+      "evidence_type": "manual",
+      "message_id": "MANUÁLIS",
+      "send_key": "1942|TRIAL|PRÓBA|2026-08-18-v3",
+      "status": "ELKÜLDVE"
+    },
+    {
+      "evidence_type": "brevo",
+      "message_id": "<202608261813.45631069637@smtp-relay.mailin.fr>",
+      "send_key": "1943|ENROLLMENT|1|2026-08-18-v3",
+      "status": "BREVO FOGADTA"
+    },
+    {
+      "evidence_type": "brevo",
+      "message_id": "<202608261813.85140716734@smtp-relay.mailin.fr>",
+      "send_key": "1944|ENROLLMENT|1|2026-08-18-v3",
+      "status": "KÉZBESÍTVE"
+    },
+    {
+      "evidence_type": "brevo",
+      "message_id": "<202608261752.60927348542@smtp-relay.mailin.fr>",
+      "send_key": "1946|TRIAL|PRÓBA|2026-08-18-v3",
+      "status": "KÉZBESÍTVE"
+    }
+  ],
+  "production_preflight_hashes": {
+    "E-mail kimenet": "6b15166bd3a410ede9a28f13626cd6befb15aeacded1210dd269b280c84d73ae",
+    "E-mail kimenet – incidensarchívum": "6baac5896b64ec9499f1e005ac0b2bdcc02f4191bf8724e155f33cc5d2e72ca2",
+    "Kézi elbírálás teendők": "0ebe11b16eac6fb9b59bb1281b7ee242a81a5220b69f2249e372323e80be59fd",
+    "Kézi küldés egyeztetés": "8471f2260773b4732196ab7a09b090e14d6d06095f5282ee0794461f1c68e336",
+    "master": "4fb9d7328796f16c7bde14595372cd74685a3b642969e4a0d1a7b791c4f9f61b"
+  },
+  "production_spreadsheet_id": "1hHlwBe_pK-Cdg7zoGFrd1adeTw8lYAMyZOCKZmzlcTs",
+  "production_write": true,
+  "projected_restoration_hashes": {
+    "E-mail kimenet": "9f30dfeab226a1d0530a1233db1402ec50df6f905917c862c00c7586e3605c51",
+    "E-mail kimenet – incidensarchívum": "6baac5896b64ec9499f1e005ac0b2bdcc02f4191bf8724e155f33cc5d2e72ca2",
+    "Kézi elbírálás teendők": "0ebe11b16eac6fb9b59bb1281b7ee242a81a5220b69f2249e372323e80be59fd",
+    "Kézi küldés egyeztetés": "8471f2260773b4732196ab7a09b090e14d6d06095f5282ee0794461f1c68e336",
+    "master": "16a1a62d5a9354cd2b330ffd2c0d9d00d2927326b49afb01728c8b1454909ac9"
+  },
+  "real_email_send": false,
+  "removed_partial_basic_filter": false,
+  "rollback_required": false,
+  "staging_content_hashes": {
+    "E-mail kimenet": "dfcec0f61b06ff3f8c5068171d1fe1f3b9ddcb3bcb54d3ddf43b8c6833abafff",
+    "E-mail kimenet – incidensarchívum": "6baac5896b64ec9499f1e005ac0b2bdcc02f4191bf8724e155f33cc5d2e72ca2",
+    "Kézi elbírálás teendők": "0ebe11b16eac6fb9b59bb1281b7ee242a81a5220b69f2249e372323e80be59fd",
+    "Kézi küldés egyeztetés": "8471f2260773b4732196ab7a09b090e14d6d06095f5282ee0794461f1c68e336",
+    "master": "16a1a62d5a9354cd2b330ffd2c0d9d00d2927326b49afb01728c8b1454909ac9"
+  },
+  "staging_hashes": {
+    "E-mail kimenet": "dfcec0f61b06ff3f8c5068171d1fe1f3b9ddcb3bcb54d3ddf43b8c6833abafff",
+    "E-mail kimenet – incidensarchívum": "6baac5896b64ec9499f1e005ac0b2bdcc02f4191bf8724e155f33cc5d2e72ca2",
+    "Kézi elbírálás teendők": "0ebe11b16eac6fb9b59bb1281b7ee242a81a5220b69f2249e372323e80be59fd",
+    "Kézi küldés egyeztetés": "8471f2260773b4732196ab7a09b090e14d6d06095f5282ee0794461f1c68e336",
+    "master": "16a1a62d5a9354cd2b330ffd2c0d9d00d2927326b49afb01728c8b1454909ac9"
+  },
+  "staging_spreadsheet_id": "1dNrM-YQpXW_KyxUqEaztZM3fVj7ILISkaBAHxh8u4RQ",
+  "target_validation": {
+    "email_approvals_enabled": 0,
+    "email_unique_send_keys": 169,
+    "master_unique_ids": 169
+  },
+  "written_semantic_hashes": {
+    "E-mail kimenet": "9f30dfeab226a1d0530a1233db1402ec50df6f905917c862c00c7586e3605c51",
+    "E-mail kimenet – incidensarchívum": "6baac5896b64ec9499f1e005ac0b2bdcc02f4191bf8724e155f33cc5d2e72ca2",
+    "Kézi elbírálás teendők": "0ebe11b16eac6fb9b59bb1281b7ee242a81a5220b69f2249e372323e80be59fd",
+    "Kézi küldés egyeztetés": "8471f2260773b4732196ab7a09b090e14d6d06095f5282ee0794461f1c68e336",
+    "master": "16a1a62d5a9354cd2b330ffd2c0d9d00d2927326b49afb01728c8b1454909ac9"
+  }
+}
