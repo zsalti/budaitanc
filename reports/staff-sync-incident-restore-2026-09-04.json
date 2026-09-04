@@ -1,0 +1,103 @@
+{
+  "generated_at": "2026-09-04T18:03:11Z",
+  "incident": "staff_sheet_sync_identity_misalignment",
+  "production_write": true,
+  "target": {
+    "spreadsheet_id": "1Tusi8FGqRPfRzB0WuxNz3LfTWrZxo05XswxIiZw-UzY",
+    "sheet": "TAGOK 2026-27"
+  },
+  "pre_sync_backup": {
+    "spreadsheet_id": "12z3P6eWAJ2Pnb99MfWX-jWyTyka8Ts11HhzQkoxEvGI",
+    "created_at": "2026-09-04T17:28:00.523Z"
+  },
+  "post_incident_evidence_backup": {
+    "spreadsheet_id": "1mHKtYapnzSDsvUyCRQXtqAQzdNKqu9puwGFZQpBuSKA",
+    "title": "Munkatársi Sheet incidens utáni bizonyíték 2026-09-04 19-37 CEST"
+  },
+  "observed_sync_delta": {
+    "new_rows": 32,
+    "existing_course_cells_changed": 7,
+    "blank_payment_dates_filled": 1,
+    "missing_rows": 0,
+    "duplicate_ids": 0
+  },
+  "restore": {
+    "mode": "targeted_reverse_diff",
+    "restored_course_cells": 7,
+    "cleared_wrong_payment_dates": 1,
+    "cleared_new_rows": 32,
+    "verified_cell_diff_against_pre_sync_backup": 0,
+    "verified_ids": 353,
+    "real_email_send": false
+  },
+  "identity_repair": {
+    "executed_at": "2026-09-04T18:36:27Z",
+    "canonical_source": {
+      "spreadsheet_id": "1hHlwBe_pK-Cdg7zoGFrd1adeTw8lYAMyZOCKZmzlcTs",
+      "sheet": " TAGOK I FÉLÉV",
+      "records": 384
+    },
+    "pre_repair_full_backup": {
+      "spreadsheet_id": "14M_QQdMRabD3IydHtyWWq6v-cajeBto_iY9vSRNY0_0",
+      "title": "Munkatársi Sheet teljes backup identitásjavítás előtt 2026-09-04 20-31 CEST",
+      "target_sheet_exact_copy_verified": true
+    },
+    "rehearsal_copy": {
+      "spreadsheet_id": "1lqtf1daNELbrksGkYtNlcWTe8SkyFRZFDBCdsn5oUhg",
+      "title": "Munkatársi Sheet identitásjavítás próba 2026-09-04 20-31 CEST",
+      "verified_before_production": true
+    },
+    "post_repair_backup": {
+      "spreadsheet_id": "1WDrPqJvBba1AmczbM3LL1uIDh9VqP6K3Kvo6-9_KFYg",
+      "title": "Munkatársi Sheet identitásjavítás utáni állapot 2026-09-04 20-36 CEST",
+      "target_sheet_exact_copy_verified": true
+    },
+    "method": "A:H teljes újraépítése a fő Sheetből; I a fő Sheet értékével, ennek hiányában az azonos névhez és jelentkezési időhöz tartozó munkatársi értékkel; J:AF kézi mezők átvitele név + jelentkezési idő alapján.",
+    "preserved_staff_only_payment_dates": 28,
+    "preserved_nonempty_local_cells": 254,
+    "resolved_default_conflicts": 1,
+    "unresolved_conflicts": 0,
+    "quarantine": {
+      "sheet": "TAGOK karantén 2026-09-04",
+      "records": 2,
+      "entry_ids": [
+        "1785",
+        "1890"
+      ]
+    },
+    "verification": {
+      "staff_records": 384,
+      "unique_staff_ids": 384,
+      "master_and_staff_id_sets_equal": true,
+      "base_field_differences": 0,
+      "identity_conflicts": 0,
+      "preserved_value_differences": 0,
+      "extra_nonempty_rows": 0,
+      "validation_cells_rows_2_to_385": 1920,
+      "basic_filter_end_row_exclusive": 385
+    }
+  },
+  "root_cause": {
+    "shared_ids_compared": 352,
+    "identity_conflicts": 153,
+    "identity_key": [
+      "Közlemény",
+      "Jelentkező (növendék) neve",
+      "Jelentkezés ideje"
+    ],
+    "mechanism": "A legkorábbi ismert, 2026-08-26-i audit szerint a fő Sheet A azonosítóoszlopa részleges rendezéssel különvált a rekord többi oszlopától. A hibás ID-személy párok átkerültek a munkatársi Sheetbe, majd a fő Sheet helyreállítása után a munkatársi Sheet identitásai nem lettek külön helyreállítva. A szinkron csak Közlemény ID alapján párosított, ezért az egyedi ID-k, a változatlan tervhash és a pontos backup mellett is más személy sorát tekintette meglévő rekordnak.",
+    "activation_failure": "A 2026-09-01-i csak olvasásos audit már 150 hibás ID-személy párost talált 155 munkatársi rekordból, és kifejezetten identitás-helyreállítást írt elő végrehajtás előtt. A későbbi élesítés ezt a tiltó feltételt nem érvényesítette: a 2026-09-01-i futás 198 új sort adott hozzá és 35 üres fizetési dátumot töltött ki úgy, hogy az ID-k szemantikai azonosságát nem ellenőrizte.",
+    "current_incident_effect": "A 2026-09-04-i futás a megmaradt hibás párosítás miatt 7 meglévő Tanfolyam cellát módosított és 1 üres befizetési dátumot idegen személy sorába töltött.",
+    "example_entry_id": "1927",
+    "exact_originating_edit": "not_proven_without_google_sheets_version_history",
+    "most_likely_originating_edit": "partial_range_sort_or_paste_that_excluded_the_id_column"
+  },
+  "prevention": {
+    "worker_change": "A preview és execute mostantól leáll, ha közös ID mellett a név vagy a jelentkezési idő eltér.",
+    "deployment_version": "08c66f1d-7857-4a0c-a9c5-e1f59d70dd08",
+    "deployment_message": "Block staff sync when IDs map to different people",
+    "health_check": {
+      "status": "ok"
+    }
+  }
+}

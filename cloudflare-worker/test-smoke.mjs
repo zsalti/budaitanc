@@ -8,6 +8,7 @@ import worker, {
   indexedStaffRows,
   planStaffSyncColumns,
   registrationFromCsvRow,
+  staffIdentityConflicts,
   staffRegistrationWriteRanges,
 } from "./src/worker.js";
 import { emailSettingsSheetRows } from "./src/email-templates.js";
@@ -132,6 +133,18 @@ assert.throws(
   () => planStaffSyncColumns([[...staffHeaderWithLocalColumns, "Tanfolyam"]]),
   /Nem egyedi munkatársi Sheet fejléc: Tanfolyam/,
   "a kétértelmű célfejléc mellett a szinkronnak írás nélkül meg kell állnia",
+);
+const identityConflictRows = [
+  staffHeaderWithLocalColumns,
+  ["1001", "Tanfolyam", "", "Hétfő", "17:00", "Teszt Tanár", "Munkatársi Név", "2026-09-01 10:00:00"],
+];
+const identityConflictIndex = indexedStaffRows(identityConflictRows, planStaffSyncColumns(identityConflictRows).indexes);
+assert.deepEqual(
+  staffIdentityConflicts(identityConflictRows[0], identityConflictIndex, [{
+    entryId: "1001", studentName: "Fő Sheet Név", submittedAt: "2026-09-01 10:00:00",
+  }]).map(({ entryId, staffRowIndex }) => ({ entryId, staffRowIndex })),
+  [{ entryId: "1001", staffRowIndex: 2 }],
+  "azonos ID eltérő személyével a szinkronnak írás előtt identitásütközést kell jeleznie",
 );
 const serviceAccount = await createTestServiceAccount();
 const pipeline = {

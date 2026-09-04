@@ -1610,6 +1610,15 @@ async function buildStaffSyncPlan(accessToken, pipeline) {
   }
   const staffColumnPlan = planStaffSyncColumns(staffRows);
   const staffByEntryId = indexedStaffRows(staffRows, staffColumnPlan.indexes);
+  const identityConflicts = staffIdentityConflicts(staffRows[0] || [], staffByEntryId, registrations);
+  if (identityConflicts.length) {
+    const sampleIds = identityConflicts.slice(0, 10).map(({ entryId }) => entryId).join(", ");
+    const remainder = identityConflicts.length > 10 ? ` (+${identityConflicts.length - 10} további)` : "";
+    throw new Error(
+      `A munkatársi Sheetben ${identityConflicts.length} Közlemény ID más személyhez tartozik, mint a fő Sheetben. ` +
+      `Első érintett ID-k: ${sampleIds}${remainder}. A szinkron nem indult el.`,
+    );
+  }
   const masterIds = new Set(registrations.map((registration) => registration.entryId));
   const mutableRows = staffRows.map((row) => [...row]);
   const writes = [];
@@ -1725,6 +1734,32 @@ function indexedStaffRows(staffRows, syncColumnIndexes) {
     byEntryId.set(entryId, { row, rowIndex: index + 1 });
   }
   return byEntryId;
+}
+
+export function staffIdentityConflicts(staffHeader, staffByEntryId, registrations) {
+  const [studentNameIndex, submittedAtIndex] = requiredHeaderAliasIndexes(
+    staffHeader,
+    [
+      ["Jelentkező (növendék) neve"],
+      ["Jelentkezés ideje"],
+    ],
+    "munkatársi Sheet",
+  );
+  return registrations.flatMap((registration) => {
+    const existing = staffByEntryId.get(registration.entryId);
+    if (!existing) return [];
+    const staffStudentName = text(existing.row[studentNameIndex]);
+    const staffSubmittedAt = text(existing.row[submittedAtIndex]);
+    if (staffStudentName === registration.studentName && staffSubmittedAt === registration.submittedAt) return [];
+    return [{
+      entryId: registration.entryId,
+      staffRowIndex: existing.rowIndex,
+      staffStudentName,
+      staffSubmittedAt,
+      masterStudentName: registration.studentName,
+      masterSubmittedAt: registration.submittedAt,
+    }];
+  });
 }
 
 function resolveStaffBaseTargetIndexes(header) {
