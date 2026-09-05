@@ -251,7 +251,7 @@ function onEdit(e) {
   const isSingleCell = range.getNumRows() === 1 && range.getNumColumns() === 1;
   const isApproval = isSingleCell && range.getColumn() === 12;
   const isManualSent = isSingleCell && range.getColumn() === 19;
-  const changesApprovedContent = rangesOverlap_(range, 5, 8) || rangesOverlap_(range, 22, 27);
+  const changesApprovedContent = rangesOverlap_(range, 5, 10) || rangesOverlap_(range, 22, 27);
   if (!isApproval && !isManualSent && !changesApprovedContent) return;
 
   const lock = LockService.getDocumentLock();
@@ -278,16 +278,9 @@ function updateEmailApproval_(sheet, checkbox) {
   const subject = String(values[5] || '').trim();
   const plain = String(values[6] || '').trim();
   const html = String(values[7] || '').trim();
-  const templateId = String(values[25] || '').trim();
-  const paramsJson = String(values[26] || '').trim();
   let reason = '';
   if (!sendKey || !recipient || !subject || !plain || !html) reason = 'Hiányzik a küldési kulcs, címzett, tárgy vagy levéltörzs.';
-  else if (!templateId || !paramsJson) reason = 'Hiányzik a Brevo template ID vagy a paraméterek JSON értéke.';
   else if (/{{|}}|{%|%}/.test([subject, plain, html].join('\n'))) reason = 'Feloldatlan merge tag maradt a levélben.';
-  else {
-    try { JSON.parse(paramsJson); }
-    catch (error) { reason = 'A Brevo-paraméterek JSON értéke hibás.'; }
-  }
   if (reason) {
     checkbox.setValue(false);
     sheet.getRange(row, 29, 1, 3).clearContent();

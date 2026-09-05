@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 
 import worker, {
@@ -507,14 +508,42 @@ try {
     method: "POST", body: JSON.stringify({ pipeline_id: pipeline.pipeline_id }),
   }), env);
   assert.equal(implicitDrafts.status, 500);
+  masterState[1][8] = "nem";
+  masterState[1][9] = 51000;
+  masterState[1][7] = "2026-09-03";
   const drafts = await worker.fetch(new Request("https://example.test/emails/drafts/test-email-token", {
     method: "POST", body: JSON.stringify({ pipeline_id: pipeline.pipeline_id, entry_ids: ["TEST-CODEX-20260723-001"] }),
   }), env);
   assert.equal(drafts.status, 200);
-  assert.equal(emailState.length, 2);
-  assert.equal(emailState[1][1], "TEST-CODEX-20260723-001");
-  assert.equal(emailState[1][11], false, "piszkozat nem kapcsolhat be jóváhagyást");
+  assert.equal(emailState.length, 3);
+  const correctedEmailRow = 2;
+  assert.equal(emailState[correctedEmailRow][1], "TEST-CODEX-20260723-001");
+  assert.equal(emailState[correctedEmailRow][11], false, "piszkozat nem kapcsolhat be jóváhagyást");
   assert.equal(brevoRequests.length, 0, "piszkozat nem küldhet Brevo-levelet");
+
+  // A manual price correction in the master Sheet must flow into the rebuilt
+  // draft, and the approved Sheet text must be what Brevo receives.
+  assert.equal(emailState[correctedEmailRow][9], 51000);
+  assert.match(emailState[correctedEmailRow][6], /51\s?000 Ft/);
+  emailState[correctedEmailRow][5] = "Kézzel javított tárgy";
+  emailState[correctedEmailRow][6] = "Kézzel javított levél: 51 000 Ft";
+  emailState[correctedEmailRow][7] = "<html><body>Kézzel javított HTML: 51 000 Ft</body></html>";
+  emailState[correctedEmailRow][26] = "{hibás JSON";
+  const approvedHash = emailRevisionHash(emailState[correctedEmailRow]);
+  emailState[correctedEmailRow][27] = approvedHash;
+  emailState[correctedEmailRow][28] = approvedHash;
+  emailState[correctedEmailRow][11] = true;
+  const sent = await worker.fetch(new Request("https://example.test/emails/send/test-email-token", {
+    method: "POST", body: JSON.stringify({ pipeline_id: pipeline.pipeline_id }),
+  }), env);
+  assert.equal(sent.status, 200);
+  assert.equal(brevoRequests.length, 1);
+  assert.equal(brevoRequests[0].subject, "Kézzel javított tárgy");
+  assert.equal(brevoRequests[0].textContent, "Kézzel javított levél: 51 000 Ft");
+  assert.equal(brevoRequests[0].htmlContent, "<html><body>Kézzel javított HTML: 51 000 Ft</body></html>");
+  assert.equal("templateId" in brevoRequests[0], false);
+  assert.equal("params" in brevoRequests[0], false);
+  assert.equal("name" in brevoRequests[0].to[0], false);
 
   const historicalId = "TEST-CODEX-HISTORY-001";
   masterState.push(masterState[1].map((value) => value));
@@ -534,6 +563,7 @@ try {
   historicalEvidence[21] = "ENROLLMENT";
   emailState.push(historicalEvidence);
   const emailRowsBeforeHistoricalDraft = emailState.length;
+  const brevoRequestsBeforeHistoricalDraft = brevoRequests.length;
   const historicalDraft = await worker.fetch(new Request("https://example.test/emails/drafts/test-email-token", {
     method: "POST", body: JSON.stringify({ pipeline_id: pipeline.pipeline_id, entry_ids: [historicalId] }),
   }), env);
@@ -541,11 +571,18 @@ try {
   const historicalResult = await historicalDraft.json();
   assert.equal(historicalResult.manual, 1, "korábbi küldési bizonyíték más címzettnél is letiltja az új piszkozatot");
   assert.equal(emailState.length, emailRowsBeforeHistoricalDraft, "történeti küldési bizonyíték mellé nem kerülhet második e-mail-sor");
-  assert.equal(brevoRequests.length, 0, "történeti bizonyíték ellenőrzése sem küldhet Brevo-levelet");
+  assert.equal(brevoRequests.length, brevoRequestsBeforeHistoricalDraft, "történeti bizonyíték ellenőrzése sem küldhet Brevo-levelet");
 
   console.log("Cloudflare Worker recovery smoke tests passed.");
 } finally {
   globalThis.fetch = originalFetch;
+}
+
+function emailRevisionHash(row) {
+  const indexes = [4, 5, 6, 7, 3, 15, 21, 22, 23, 24, 25, 26];
+  return createHash("sha256")
+    .update(indexes.map((index) => String(row[index] ?? "").trim()).join("\u001f"), "utf8")
+    .digest("hex");
 }
 
 async function importRequest(mode, csv, planHash = "", selectedEnv = env, legacyBackupId = "") {

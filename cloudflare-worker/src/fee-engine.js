@@ -145,12 +145,15 @@ export function calculateRegistration(registration, config) {
 
   const discountResult = validateDiscount(registration, firstClass.date);
   if (discountResult.manualReason) return manual(discountResult.manualReason, { courseKey, firstClass, semester, feeCategory: category });
-  const fee = discountResult.applied ? band.discountedFee : band.baseFee;
+  const calculatedFee = discountResult.applied ? band.discountedFee : band.baseFee;
+  const override = feeOverride(registration.feeOverride);
+  if (override.manualReason) return manual(override.manualReason, { courseKey, firstClass, semester, feeCategory: category });
+  const fee = override.value || calculatedFee;
   const feeBand = `${formatDate(band.start)}–${formatDate(band.end)}`;
   return readyResult({
     courseKey, isTrial, firstClass, semester, feeBand, feeCategory: category,
     discount: discountResult.label, fee,
-    explanation: `Első óra: ${formatDate(firstClass.date)} ${firstClass.startTime}; ${semester}. félév, ${feeBand}, ${category}, ${discountResult.label.toLowerCase()}: ${formatMoney(fee)}.`,
+    explanation: `Első óra: ${formatDate(firstClass.date)} ${firstClass.startTime}; ${semester}. félév, ${feeBand}, ${category}, ${discountResult.label.toLowerCase()}: ${formatMoney(fee)}.${override.value ? ` Kézi tandíj-felülírás a fő Sheetből (számított érték: ${formatMoney(calculatedFee)}).` : ""}`,
   });
 }
 
@@ -320,6 +323,16 @@ function uniqueCategory(sessions, courseRaw = "") {
     return `${frequency}x${durations[0]}`;
   }
   return values[0];
+}
+
+function feeOverride(value) {
+  const raw = text(value);
+  if (!raw) return { value: 0, manualReason: "" };
+  const parsed = Number(raw.replace(/[^0-9.-]/g, ""));
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    return { value: 0, manualReason: "A fő Sheet kézi tandíjértéke nem értelmezhető." };
+  }
+  return { value: parsed, manualReason: "" };
 }
 
 function readyResult(value) { return { status: AUTOMATION_STATUS.READY, manualReason: "", ...value }; }

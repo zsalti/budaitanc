@@ -157,6 +157,30 @@ assert.equal(liveWednesdayArtisticGymnasticsResult.status, AUTOMATION_STATUS.REA
 assert.equal(liveWednesdayArtisticGymnasticsResult.feeCategory, "1x45");
 assert.equal(liveWednesdayArtisticGymnasticsResult.fee, 39000);
 
+// Bognár Zsuzsanna's registration selected only the Wednesday 75-minute
+// modern class. The timetable's two-session label must not charge 2x75.
+const bognarConfig = parseAutomationConfig([
+  ["MODERN TÁNC 12-15 ÉVES", "", "SZERDA", "15:30", "16:45", "Hajós terem", "Szirányi Laura", 2, 75, "2x75", false],
+  ["MODERN TÁNC 12-15 ÉVES", "", "PÉNTEK", "15:15", "16:30", "Hajós terem", "Szirányi Laura", 2, 75, "2x75", false],
+  ["", "", "", "", "", "", "", "", "", "", "", "", 1, "2026-09-03", "2026-09-15", "1x75", 51000, 48450],
+  ["", "", "", "", "", "", "", "", "", "", "", "", 1, "2026-09-03", "2026-09-15", "2x75", 83000, 78850],
+]);
+const bognarResult = calculateRegistration({
+  ...base,
+  courseRaw: "MODERN TÁNC 12-15 ÉVES/SZERDA HAJÓS TEREM/15.30-16.45/SZIRÁNYI LAURA",
+  submittedAt: "2026-09-03",
+}, bognarConfig);
+assert.equal(bognarResult.status, AUTOMATION_STATUS.READY);
+assert.equal(bognarResult.feeCategory, "1x75");
+assert.equal(bognarResult.fee, 51000);
+
+const manualFeeOverrideResult = calculateRegistration({
+  ...base,
+  feeOverride: "51000",
+}, noException);
+assert.equal(manualFeeOverrideResult.fee, 51000);
+assert.match(manualFeeOverrideResult.explanation, /Kézi tandíj-felülírás/);
+
 const alternateAttendance = calculateRegistration({
   ...base,
   alternateAttendance: "heti 1",

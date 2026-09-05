@@ -12,7 +12,6 @@ import {
 import {
   EMAIL_EVENT,
   TEMPLATE_VERSION,
-  brevoTemplateDefinitions,
   buildEmailDraft,
   defaultEmailSettings,
   emailSettingsSheetRows,
@@ -44,7 +43,6 @@ const AUTOMATION_END_COLUMN = "AR";
 const CONTACT_FIRST_NAME_COLUMN = "AS";
 const STUDENT_FIRST_NAME_COLUMN = "AT";
 const BREVO_SEND_URL = "https://api.brevo.com/v3/smtp/email";
-const BREVO_TEMPLATE_URL = "https://api.brevo.com/v3/smtp/templates";
 const STAFF_BASE_SYNC_COLUMNS = [
   { targetHeader: "Közlemény", sourceHeaders: ["Közlemény"], targetHeaders: ["Közlemény"] },
   {
@@ -2493,7 +2491,7 @@ function registrationFromMasterRow(row) {
     parentName: text(row[18]), districtCardNumber: text(row[19]), districtCardExpiry: text(row[20]),
     siblingName: text(row[22]), siblingGroup: text(row[23]), carryoverAmount: text(row[24]) || text(row[27]),
     trialDate: text(row[33]), paidDate: text(row[10]),
-    contactFirstName: text(row[44]), studentFirstName: text(row[45]),
+    contactFirstName: text(row[44]), studentFirstName: text(row[45]), feeOverride: text(row[9]),
   };
 }
 
@@ -2813,7 +2811,6 @@ async function sendApprovedEmails(accessToken, pipeline, env) {
   let skipped = 0;
   let failed = 0;
   let needsReview = 0;
-  const verifiedTemplates = new Map();
   const suppressedRecipients = new Set(rows.slice(1)
     .filter((row) => [
       AUTOMATION_STATUS.HARD_BOUNCE, AUTOMATION_STATUS.BLOCKED,
@@ -2853,9 +2850,6 @@ async function sendApprovedEmails(accessToken, pipeline, env) {
       if (!text(row[EMAIL_COLUMN.TO]) || !text(row[EMAIL_COLUMN.SUBJECT]) || !text(row[EMAIL_COLUMN.PLAIN]) || !text(row[EMAIL_COLUMN.HTML])) {
         throw new Error("Hiányzik a címzett, tárgy vagy levéltörzs.");
       }
-      if (!text(row[EMAIL_COLUMN.TEMPLATE_ID]) || !text(row[EMAIL_COLUMN.PARAMS_JSON])) {
-        throw new Error("Hiányzik a Brevo template ID vagy a paraméterek JSON értéke.");
-      }
       if (/{{|}}|{%|%}/.test([row[EMAIL_COLUMN.SUBJECT], row[EMAIL_COLUMN.PLAIN], row[EMAIL_COLUMN.HTML]].join("\n"))) {
         throw new Error("Feloldatlan merge tag maradt a jóváhagyott levélben.");
       }
@@ -2870,21 +2864,14 @@ async function sendApprovedEmails(accessToken, pipeline, env) {
         skipped += 1;
         continue;
       }
-      let params;
-      try { params = JSON.parse(text(row[EMAIL_COLUMN.PARAMS_JSON])); }
-      catch { throw new Error("A Brevo paraméterek JSON értéke hibás."); }
-      await verifyBrevoTemplate(env, {
-        templateId: Number(row[EMAIL_COLUMN.TEMPLATE_ID]),
-        templateKey: text(row[EMAIL_COLUMN.TEMPLATE_KEY]),
-      }, verifiedTemplates);
       await writeSheetRanges(accessToken, pipeline.spreadsheet_id, [
         { range: `${quoteSheetName(EMAIL_OUTPUT_TAB)}!L${rowIndex}:M${rowIndex}`, values: [[false, AUTOMATION_STATUS.APPROVED]] },
       ]);
       const brevo = await sendBrevoEmail(env, {
         to: text(row[EMAIL_COLUMN.TO]),
-        toName: params.recipient_first_name || "",
-        templateId: Number(row[EMAIL_COLUMN.TEMPLATE_ID]),
-        params,
+        subject: text(row[EMAIL_COLUMN.SUBJECT]),
+        plain: text(row[EMAIL_COLUMN.PLAIN]),
+        html: text(row[EMAIL_COLUMN.HTML]),
         eventType: text(row[EMAIL_COLUMN.EVENT_TYPE]),
         sendKey,
       });
@@ -2909,24 +2896,6 @@ async function sendApprovedEmails(accessToken, pipeline, env) {
   return { accepted, sent: accepted, skipped, failed, needs_review: needsReview };
 }
 
-async function verifyBrevoTemplate(env, template, cache) {
-  const cacheKey = `${template.templateId}|${template.templateKey}`;
-  if (cache.has(cacheKey)) return cache.get(cacheKey);
-  const expected = brevoTemplateDefinitions().find((item) => item.key === template.templateKey);
-  if (!expected) throw new Error(`Ismeretlen helyi Brevo-sablonkulcs: ${template.templateKey || "(üres)"}.`);
-  const response = await fetch(`${BREVO_TEMPLATE_URL}/${encodeURIComponent(template.templateId)}`, {
-    headers: { accept: "application/json", "api-key": env.BREVO_API_KEY },
-  });
-  if (!response.ok) throw new Error(`A Brevo-sablon visszaellenőrzése sikertelen (${response.status}): ${(await response.text()).slice(0, 300)}`);
-  const actual = await response.json();
-  if (!actual.isActive) throw new Error(`A Brevo-sablon inaktív: ${template.templateKey} (${template.templateId}).`);
-  if (text(actual.subject) !== expected.subject || text(actual.htmlContent) !== text(expected.htmlContent)) {
-    throw new Error(`A Brevo-sablon tartalma eltér a jóváhagyott repository-verziótól: ${template.templateKey} (${template.templateId}).`);
-  }
-  cache.set(cacheKey, actual);
-  return actual;
-}
-
 async function sendBrevoEmail(env, message) {
   const idempotencyKey = await deterministicUuid(message.sendKey);
   let response;
@@ -2937,8 +2906,9 @@ async function sendBrevoEmail(env, message) {
       body: JSON.stringify({
         sender: { email: env.BREVO_SENDER_EMAIL, name: env.BREVO_SENDER_NAME || "Budai Táncklub" },
         to: [{ email: message.to, name: message.toName || undefined }],
-        templateId: message.templateId,
-        params: message.params,
+        subject: message.subject,
+        textContent: message.plain,
+        htmlContent: message.html,
         replyTo: env.BREVO_REPLY_TO_EMAIL ? { email: env.BREVO_REPLY_TO_EMAIL } : undefined,
         tags: ["budai-tancklub", text(message.eventType).toLowerCase()].filter(Boolean),
         headers: { "Idempotency-Key": idempotencyKey, "X-Mailin-custom": `send_key:${message.sendKey}` },
