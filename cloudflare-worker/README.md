@@ -246,8 +246,10 @@ részleges sort, ezért nem tudja az oszlopokat egymáshoz képest eltolni.
 
 A fő Sheethez kötött Apps Scriptben a `Budai Tánc → Munkatársi Sheet-szinkron
 előnézete` indít írásmentes ellenőrzést; a külön `… végrehajtása` menüpont
-előbb megmutatja az eredményt, majd a backup-ID-t és a végrehajtást is
-emberrel hagyatja jóvá. A kód az
+előbb csak a megváltozó, változatlan és összes rekord számát mutatja. A
+jóváhagyás után az Apps Script automatikusan friss Drive-másolatot készít a
+munkatársi Sheetről, olvasási jogot ad a Worker szolgáltatási fiókjának, és a
+kapott backup-ID-val indítja a végrehajtást. A kód az
 `../apps-script/master-sheet-sync.gs` fájlban van. A token egyszeri megadása
 a Script Properties-ben történik. A bound Apps Scriptbe a kiadott forrást még
 külön be kell másolni/publikálni; a Worker deploy önmagában nem módosít Google

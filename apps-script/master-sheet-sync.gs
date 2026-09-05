@@ -1,6 +1,8 @@
 const BUDAI_TANC_SYNC = Object.freeze({
   endpoint: 'https://budaitancklub-registration-webhook.zsolt-3bf.workers.dev',
   pipelineId: 'tanctanfolyam_jelentkezes',
+  staffSpreadsheetId: '1Tusi8FGqRPfRzB0WuxNz3LfTWrZxo05XswxIiZw-UzY',
+  backupReaderEmail: 'budaitancklub-reg@budaitancklub.iam.gserviceaccount.com',
   emailTokenProperty: 'EMAIL_ADMIN_TOKEN',
   syncTokenProperty: 'SYNC_ADMIN_TOKEN',
 });
@@ -70,19 +72,12 @@ function syncStaffSheet() {
   const preview = callSyncEndpoint_({ mode: 'preview' });
   const confirmation = ui.alert(
     'Munkatársi Sheet-szinkron végrehajtása',
-    staffSyncSummary_(preview) + '\n\nA Worker azonos tervhash-t, friss Drive-backupot és visszaolvasást követel. Folytatod?',
+    staffSyncSummary_(preview) + '\n\nA rendszer automatikusan friss Drive-backupot készít, majd csak a változatlan előnézeti tervet hajtja végre. Folytatod?',
     ui.ButtonSet.YES_NO,
   );
   if (confirmation !== ui.Button.YES) return;
 
-  const backupPrompt = ui.prompt(
-    'Friss Drive-backup azonosító',
-    'Add meg a közvetlenül a munkatársi Sheet-ről készített, elérhető Google Sheets Drive-másolat azonosítóját.',
-    ui.ButtonSet.OK_CANCEL,
-  );
-  if (backupPrompt.getSelectedButton() !== ui.Button.OK) return;
-  const backupId = backupPrompt.getResponseText().trim();
-  if (!backupId) return ui.alert('A végrehajtáshoz kötelező a friss Drive-backup azonosítója.');
+  const backupId = createStaffSyncBackup_();
 
   const result = callSyncEndpoint_({
     mode: 'execute',
@@ -90,6 +85,19 @@ function syncStaffSheet() {
     backup_id: backupId,
   });
   showStaffSyncResult_('Munkatársi Sheet-szinkron elkészült', result);
+}
+
+function createStaffSyncBackup_() {
+  const source = DriveApp.getFileById(BUDAI_TANC_SYNC.staffSpreadsheetId);
+  const parents = source.getParents();
+  const timezone = Session.getScriptTimeZone() || 'Europe/Budapest';
+  const timestamp = Utilities.formatDate(new Date(), timezone, 'yyyy-MM-dd HH-mm-ss');
+  const name = `Munkatársi Sheet automatikus backup ${timestamp}`;
+  const backup = parents.hasNext()
+    ? source.makeCopy(name, parents.next())
+    : source.makeCopy(name);
+  backup.addViewer(BUDAI_TANC_SYNC.backupReaderEmail);
+  return backup.getId();
 }
 
 function importPayments() {
@@ -170,21 +178,14 @@ function callSyncEndpoint_(payload) {
 }
 
 function staffSyncSummary_(result) {
-  const extraColumns = (result.added_columns || []).join(', ') || 'nincs';
-  const newRowColumns = (result.new_row_columns || result.synced_columns || []).join(', ') || 'n/a';
-  const existingRowColumns = (result.existing_row_columns || []).join(', ') || 'nincs';
-  const conditionalColumns = (result.conditional_columns || []).join(', ') || 'nincs';
-  const staffOnlyIds = (result.staff_only_entry_ids || []).join(', ') || 'nincs';
-  return `Új: ${result.created || 0}; frissül: ${result.updated || 0}; változatlan: ${result.unchanged || 0}; ` +
-    `összes fő Sheet-rekord: ${result.total || 0}; új oszlopok: ${extraColumns}.\n` +
-    `Új soron kitöltött oszlopok: ${newRowColumns}.\n` +
-    `Meglévő soron írható oszlopok: ${existingRowColumns}.\n` +
-    `Csak üres munkatársi cellába írható: ${conditionalColumns}.\n` +
-    `Csak a munkatársi lapon szereplő, érintetlenül hagyott ID-k: ${staffOnlyIds}.`;
+  const changed = (result.created || 0) + (result.updated || 0);
+  return `Változni fog: ${changed}\n` +
+    `Nem változik: ${result.unchanged || 0}\n` +
+    `Összesen: ${result.total || 0}`;
 }
 
 function showStaffSyncResult_(title, result) {
-  SpreadsheetApp.getUi().alert(`${staffSyncSummary_(result)}\nTervhash: ${result.plan_hash || 'n/a'}`);
+  SpreadsheetApp.getUi().alert(title, staffSyncSummary_(result), SpreadsheetApp.getUi().ButtonSet.OK);
 }
 
 function protectRegistrationSourceColumns() {
